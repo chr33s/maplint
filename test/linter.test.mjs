@@ -35,3 +35,18 @@ test('rule configuration, ignore directives, and syntax errors', () => {
   assert.equal(error.some(d => d.rule === 'syntax'), true);
   assert.throws(() => normalizeRules({ 'random-rule': 'error' }), /Unknown/);
 });
+
+test('directive-like text in strings and regex literals does not suppress diagnostics', () => {
+  const text = [
+    'const stringDirective = "// maplint-disable-next-line no-debugger";',
+    'debugger;',
+    'const regexDirective = /\\/\\/ maplint-disable-next-line no-debugger/;',
+    'debugger;',
+    '// maplint-disable-next-line no-debugger',
+    'debugger;',
+  ].join('\n');
+  const found = lint(text).filter(d => d.rule === 'no-debugger');
+  assert.equal(found.length, 2);
+  assert.equal(found[0].line, 2);
+  assert.equal(found[1].line, 4);
+});

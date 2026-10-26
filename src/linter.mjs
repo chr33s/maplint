@@ -26,13 +26,14 @@ export function lintVirtual({ originalFile, original, virtual, output, encoding 
   const kind = ['.tsx', '.jsx'].includes(extension) ? ts.ScriptKind.TSX
     : ['.js', '.mjs', '.cjs'].includes(extension) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const sf = ts.createSourceFile(virtual, output.text, ts.ScriptTarget.Latest, true, kind);
+  const suppressionDirectives = getSuppressionDirectives(ts, original);
   const problems = [];
   function emit(rule, message, start, end, forceError = false) {
     if (!forceError && rules[rule] === 'off') return;
     const mapped = mappingForSpan(output, original, encoding, start, end);
     if (!mapped || mapped.start < 0 || mapped.end < mapped.start || mapped.end > original.length) return;
     const line = lineCol(original, mapped.start);
-    if (!forceError && disabled(original, line.line, rule)) return;
+    if (!forceError && disabled(suppressionDirectives, line.line, rule)) return;
     problems.push({ file: originalFile, line: line.line, column: line.column,
       start: mapped.start, end: mapped.end, severity: forceError ? 'error' : rules[rule], rule, message });
   }
@@ -77,17 +78,29 @@ export function lineCol(text, index) {
   return { line, column: index - last };
 }
 
-function disabled(text, line, rule) {
-  const lines = text.split(/\r?\n/);
-  const same = lines[line - 1] ?? '';
-  const previous = lines[line - 2] ?? '';
-  function contains(disable) {
-    // This intentionally handles line comments, not block directives.
-    const match = /\/\/\s*maplint-disable(?:-next-line|-line)?\b\s*(.*)/.exec(disable);
-    if (!match) return false;
-    const named = match[1].split(/[\s,]+/).filter(Boolean);
-    return named.length === 0 || named.includes(rule);
+function getSuppressionDirectives(ts, text) {
+  const directives = new Map();
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+    if (kind !== ts.SyntaxKind.SingleLineCommentTrivia) continue;
+    const comment = scanner.getTokenText();
+    const match = /^\/\/\s*maplint-disable(-next-line|-line)?\b\s*(.*)/.exec(comment);
+    if (!match) continue;
+    const line = lineCol(text, scanner.getTokenPos()).line;
+    directives.set(line, {
+      mode: match[1] ?? '',
+      rules: match[2].split(/[\s,]+/).filter(Boolean),
+    });
   }
-  return (/maplint-disable-line\b/.test(same) && contains(same)) ||
-    (/maplint-disable-next-line\b/.test(previous) && contains(previous));
+  return directives;
+}
+
+function disabled(directives, line, rule) {
+  function applies(directive) {
+    return directive && (!directive.rules.length || directive.rules.includes(rule));
+  }
+  const sameLine = directives.get(line);
+  const previousLine = directives.get(line - 1);
+  return (sameLine?.mode === '-line' && applies(sameLine)) ||
+    (previousLine?.mode === '-next-line' && applies(previousLine));
 }
