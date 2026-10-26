@@ -11,7 +11,7 @@ Maplint is a working proof of concept, not a drop-in Oxlint replacement. It exec
 - **Six AST rules:** `no-debugger`, `no-console`, `eqeqeq`, `no-var`, `no-eval`, `no-explicit-any`. Severity configuration: `off`, `warn`, `error`.
 - **Embedded example mapper** for script blocks in `.vue`, `.svelte`, `.astro`, and `.html`, including Astro frontmatter. It intentionally does **not** parse framework templates or component semantics.
 - **Native TypeScript 7.1 diagnostics** via `tsc --project ... --noEmit --pretty false --runExternalCode` (`--typecheck`).
-- Console/JSON output, syntax errors, suppression for `// maplint-disable-next-line RULE` and `// maplint-disable-line RULE`.
+- Console/JSON output, syntax errors, suppression for `// maplint-disable-next-line RULE` and `// maplint-disable-line RULE` (read from comments in the mapped code, so they must sit inside a script region).
 - Explicit permission gate `--allow-external` for all mapper execution, including the native compiler.
 
 ## Quick start
@@ -33,7 +33,7 @@ node dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external 
 node dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external --typecheck
 ```
 
-`npm test` also builds before running the compiled tests. From the repository root, `npx --no-install maplint ...` works after `npm run build`. `--project` can point to a different project; positional files/directories restrict **lint** selection, but `--typecheck` always checks the full TypeScript project.
+`npm test` also builds before running the compiled tests. From the repository root, `npx --no-install maplint ...` works after `npm run build`. `--project` can point to a different project; without paths, Maplint lints every JS/TS and mapped file that the tsconfig's `files`/`include`/`exclude` (and `extends`) match, regardless of `allowJs`, skipping build output directories such as `dist`, `build` and `coverage`. Positional files/directories restrict **lint** selection, but `--typecheck` always checks the full TypeScript project.
 
 To run TypeScript 7.1 directly against the same content mapper:
 
@@ -97,27 +97,13 @@ Content mappers **transform and map** source. They do not provide the lint rules
 - Content mappers participate in TypeScript's configured-project pipeline, not necessarily programs constructed from `createPrograms` in the new API (see [TypeScript issue #64641](https://github.com/microsoft/TypeScript/issues/64641)). Therefore this MVP invokes native `tsc -p` directly, rather than assuming API-created programs inherit mapper registrations.
 - Like `tsc --runExternalCode`, mappers are **arbitrary external executables**. Only run vetted mappers; Maplint requires an explicit `--allow-external` opt-in.
 
-## Test status (2026-10-26)
+## Test status
 
-**17 tests pass** after strict TypeScript compilation. They cover protocol round-trip, mapped JS/TS rules, Astro/Vue/Svelte extraction, original-source positions, Unicode UTF-8/UTF-16 maps, JSON CLI output, opt-in enforcement, a third-party mapper fixture, suppression comments, and mocked native-compiler invocation. The compiled CLI and bundled mapper were also exercised with the installed TypeScript 7.1 beta; native typechecking exited successfully.
+See [DESIGN.md](DESIGN.md#test-evidence-and-acceptance-criteria) for what the suite covers and what has been validated against TypeScript 7.1.
 
 ## Layout
 
-```text
-bin/maplint.ts                       TypeScript CLI entry point
-src/cli.ts                           project scan, diagnostics, optional native compiler
-src/mapper-host.ts                   mapper package launch, RPC orchestration, span decoding
-src/jsonrpc.ts                       minimal framed JSON-RPC transport
-src/linter.ts                        AST rules, syntax diagnostics, suppression
-src/config.ts                        config discovery and npm mapper resolution
-src/embedded.ts                      demonstration framework script extractor and mappings
-dist/                                 emitted ESM JavaScript
-packages/embedded-mapper/            runnable content mapper process and manifest
-examples/demo/                        Vue / Svelte / Astro example project
-test/                                 integration and unit tests
-DESIGN.md                             architecture/specification
-PLAN.md                               implementation roadmap
-```
+Source modules are described in [DESIGN.md](DESIGN.md#modules-and-interfaces). `packages/embedded-mapper/` is the runnable demo mapper, `examples/demo/` a Vue/Svelte/Astro example project, `test/` the unit and integration tests, and `dist/` the emitted ESM build.
 
 ## Upstream references
 

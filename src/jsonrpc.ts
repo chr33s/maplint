@@ -1,6 +1,8 @@
 /** JSON-RPC 2.0 over Content-Length framed byte streams (the TypeScript mapper transport). */
 import type { Readable, Writable } from 'node:stream';
 
+const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
+
 interface PendingRequest {
   resolve: (value: any) => void;
   reject: (error: Error) => void;
@@ -76,7 +78,7 @@ export class JsonRpcPeer {
     if (this.closed) return;
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
     // Bound untrusted data, including never-terminated headers.
-    if (this.buffer.length > 32 * 1024 * 1024) {
+    if (this.buffer.length > MAX_MESSAGE_BYTES) {
       this.close(new Error('Content mapper response exceeds 32 MiB'));
       return;
     }
@@ -89,7 +91,7 @@ export class JsonRpcPeer {
         }
         const header = this.buffer.subarray(0, headerEnd).toString('ascii');
         const match = header.match(/(?:^|\r\n)Content-Length:\s*(\d+)\s*(?:\r\n|$)/i);
-        if (!match || Number(match[1]) > 32 * 1024 * 1024) {
+        if (!match || Number(match[1]) > MAX_MESSAGE_BYTES) {
           this.close(new Error('Invalid content-mapper Content-Length header'));
           return;
         }

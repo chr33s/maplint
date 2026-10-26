@@ -1,5 +1,5 @@
 import { JsonRpcPeer } from '../../src/jsonrpc.js';
-import { buildEmbeddedVirtual } from '../../src/embedded.js';
+import { buildEmbeddedVirtual } from './embedded.js';
 import type { PositionEncoding } from '../../src/types.js';
 
 // The compiler starts this executable as a separate trusted process.

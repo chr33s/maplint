@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lintVirtual, normalizeRules } from '../src/linter.js';
-import { buildEmbeddedVirtual } from '../src/embedded.js';
+import path from 'node:path';
+import { lintVirtual } from '../src/linter.js';
+import { normalizeRules } from '../src/rules.js';
+import { identityOutput, indexText } from '../src/spans.js';
+import { buildEmbeddedVirtual } from '../packages/embedded-mapper/embedded.js';
 
 function lint(text: string, file = '/x/src.ts', rules = normalizeRules()) {
-  const embedded = file.endsWith('.vue');
-  const output = embedded ? buildEmbeddedVirtual(file, text)
-    : { text, extension: '.ts', mappings: [[0, text.length, 0, text.length, 0]] };
-  return lintVirtual({ originalFile: file, original: text, virtual: file + output.extension,
+  const output = file.endsWith('.vue') ? buildEmbeddedVirtual(file, text) : identityOutput(text, path.extname(file));
+  return lintVirtual({ originalFile: file, original: indexText(text, 'utf-16'), virtual: file + output.extension,
     output, rules });
 }
 
@@ -49,4 +50,41 @@ test('directive-like text in strings and regex literals does not suppress diagno
   assert.equal(found.length, 2);
   assert.equal(found[0].line, 2);
   assert.equal(found[1].line, 4);
+});
+
+test('suppression directives are read from mapped code, not template text', () => {
+  const directive = '// maplint-disable-next-line no-debugger';
+  // A backtick in template text must not swallow the real directive inside <script>.
+  const backtick = `<template><p>use \`npm i</p></template>\n<script lang="ts">\n${directive}\ndebugger;\n</script>`;
+  assert.deepEqual(lint(backtick, '/x/App.vue'), []);
+  // Directive-like template text is not a comment in the virtual code.
+  const template = `<template><p>\n${directive}\n</p></template><script lang="ts">debugger;</script>`;
+  assert.deepEqual(lint(template, '/x/App.vue').map(d => `${d.rule}@${d.line}`), ['no-debugger@3']);
+});
+
+test('directive-like JSX text does not suppress diagnostics', () => {
+  const found = lint('const a = <p>{1} // maplint-disable-line no-debugger</p>; debugger;', '/x/a.tsx');
+  assert.deepEqual(found.map(d => d.rule), ['no-debugger']);
+  const opening = lint('const b = <p> // maplint-disable-line no-debugger\n</p>; debugger;', '/x/b.tsx');
+  assert.deepEqual(opening.map(d => d.rule), ['no-debugger']);
+});
+
+test('directives after punctuation tokens suppress diagnostics', () => {
+  const cases = [
+    'const h = [\n  console.log, // maplint-disable-line no-console\n  1,\n];',
+    'const o = {\n  log: console.log, // maplint-disable-line no-console\n};',
+    'foo(a, // maplint-disable-next-line no-console\n  console.log);',
+    'if (x) { // maplint-disable-next-line\n  console.log(1);\n}',
+    'const t = `${console.log, // maplint-disable-line no-console\n  a}`;',
+  ];
+  for (const text of cases) assert.deepEqual(lint(text), [], text);
+});
+
+test('directive-like template text does not suppress diagnostics', () => {
+  const found = lint('debugger; const t = `${1} // maplint-disable-line no-debugger\n`;');
+  assert.deepEqual(found.map(d => `${d.rule}@${d.line}`), ['no-debugger@1']);
+});
+
+test('no-var ignores using declarations', () => {
+  assert.deepEqual(lint('using a = f();\nawait using b = g();\nvar c = 1;').map(d => `${d.rule}@${d.line}`), ['no-var@3']);
 });

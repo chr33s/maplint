@@ -38,12 +38,16 @@ Native TypeScript 7.1 and Maplint launch compliant content mappers independently
 
 | Module | Role | Implementation |
 | --- | --- | --- |
-| `src/config.ts` | Read `tsconfig`, rule config and source list, locate mapper manifest | TypeScript 6 config parser; npm `node_modules` ancestor resolution |
-| `src/mapper-host.ts` | Spawn external mapper process and maintain `projectHandle` | `child_process.spawn`, one process per mapper entry |
+| `src/cli.ts` | Parse arguments, format console/JSON output, exit code | `node:util` `parseArgs` |
+| `src/engine.ts` | Orchestrate a lint run; run native `tsc` | Node.js |
+| `src/project.ts` | Read `tsconfig`, rule config and file list; locate mapper manifests | TypeScript 6 config parser resolves `files`/`include`/`exclude`, matched against every lintable extension; ancestor `node_modules` lookup |
+| `src/mapper-host.ts` | Spawn external mapper process, maintain `projectHandle`, validate transform output | `child_process.spawn`, one process per mapper entry |
 | `src/jsonrpc.ts` | Request/response communication with mapper executable | JSON-RPC 2.0 + `Content-Length` framing |
-| `src/linter.ts` | Syntactic lint rules | TypeScript 6 compatibility AST, tree visitor |
-| `src/cli.ts` | Orchestrate lint run, CLI, diagnostics, native `tsc` | Node.js |
-| `src/embedded.ts` | Demonstration embedded-language source transform | Extract script blocks and Astro frontmatter |
+| `src/spans.ts` | Per-text offset and line index, virtual → original span mapping | Precomputed tables, binary search |
+| `src/rules.ts` | Rule registry: names, default severities, messages, detection | TypeScript 6 AST type guards |
+| `src/linter.ts` | Parse virtual text, run rules, apply suppressions, map findings | TypeScript 6 compatibility AST |
+| `src/ts6.ts` | Typed lazy loader for the TypeScript 6 API | `createRequire` |
+| `packages/embedded-mapper/embedded.ts` | Demonstration embedded-language source transform | Extract script blocks and Astro frontmatter |
 | `packages/embedded-mapper/server.ts` | Register executable mapper with TypeScript 7.1 | JSON-RPC protocol implementation |
 
 The TypeScript sources and tests compile with strict checking into ESM `.js` files in `dist/`. The root package's `"type": "module"` marks these emitted `.js` files as ESM; `.mjs` source extensions are therefore unnecessary.
@@ -55,8 +59,8 @@ The TypeScript sources and tests compile with strict checking into ESM `.js` fil
 3. Require `--allow-external`, spawn the executable in its own package directory (never through a shell).
 4. Send `initialize` offering `utf-16` and `utf-8`. Respect mapper-chosen encoding.
 5. Send `openProject` with absolute config path, opaque handle, mapper options, and declared compiler options.
-6. For every associated file, send `transform { fileName, content, projectHandle }`; consume `{text,extension,mappings,diagnostics?,supplemental?}`.
-7. Lint canonical output and supplemental output; collapse duplicate reported spans.
+6. For every associated file, send `transform { fileName, content, projectHandle }`; consume `{text,extension,mappings,diagnostics?,supplemental?}`, validated once at the process boundary.
+7. Lint canonical output and JS/TS supplemental outputs (including declarations); collapse duplicate diagnostics.
 8. Send `closeProject`; terminate the process and close the JSON-RPC connection even if linting failed.
 
 ### Span-map interpretation
@@ -76,11 +80,13 @@ Protocol mappings are tuples:
 | `no-debugger` | error | `DebuggerStatement` |
 | `no-console` | warn | `PropertyAccessExpression` with `console` receiver |
 | `eqeqeq` | warn | `==`, `!=` binary operator token |
-| `no-var` | warn | VariableDeclarationList lacking `let` or `const` |
+| `no-var` | warn | VariableDeclarationList lacking `let`, `const`, or `using` |
 | `no-eval` | error | CallExpression on identifier `eval` |
 | `no-explicit-any` | warn | `AnyKeyword` |
 
 These are minimal syntactic rules, **not fully ESLint/Oxlint-equivalent**: e.g. shadowed `console`, permissive `eqeqeq` exceptions, and framework template scope are not evaluated.
+
+Suppression directives (`// maplint-disable-line` and `// maplint-disable-next-line`, optionally followed by rule names) are read from comment trivia in the virtual AST and mapped back to original lines. Template markup, strings, regexes, and JSX text never act as directives, so a directive must sit inside a mapped script region.
 
 ## External code security
 
@@ -102,7 +108,7 @@ These are minimal syntactic rules, **not fully ESLint/Oxlint-equivalent**: e.g. 
 
 ## Test evidence and acceptance criteria
 
-Locally validated 2026-10-26: **17 unit/integration tests pass** after strict TypeScript compilation using Node 22 and TypeScript 7.1. Tests cover a third-party mapper and UTF-8, original Vue and Astro source spans, controls and suppressed synthetic spans, CLI exit codes, errors and a mock `tsc` command preserving `--runExternalCode`. The compiled CLI and bundled mapper successfully ran against the TypeScript 7.1 beta.
+Locally validated 2026-10-26: the unit/integration suite passes after strict TypeScript compilation using Node 22 and TypeScript 7.1. Tests cover a third-party mapper and UTF-8, original Vue and Astro source spans, controls and suppressed synthetic spans, suppression directives in framework files, teardown of a mapper that fails its handshake, CLI exit codes, errors and a mock `tsc` command preserving `--runExternalCode`. The compiled CLI and bundled mapper successfully ran against the TypeScript 7.1 beta.
 
 Not validated locally: TypeScript 7.1 editor support, framework-specific type soundness, performance relative to Oxlint.
 

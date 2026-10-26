@@ -1,25 +1,31 @@
 import path from 'node:path';
-import type { MapperOutput, PositionEncoding } from './types.js';
+import { indexText } from '../../src/spans.js';
+import type { Mapping, MapperOutput, PositionEncoding } from '../../src/types.js';
 
-/** Small demonstration extractor. Not a conforming Vue/Svelte/Astro parser. */
-export function extractEmbeddedSections(filename: string, original: string): Array<{
+interface EmbeddedSection {
   start: number;
   end: number;
   lang: string;
-}> {
+}
+
+/** Small demonstration extractor. Not a conforming Vue/Svelte/Astro parser. */
+export function extractEmbeddedSections(filename: string, original: string): EmbeddedSection[] {
   const ext = path.extname(filename).toLowerCase();
-  const parts = [];
+  const parts: EmbeddedSection[] = [];
+  let pos = 0;
   if (ext === '.astro') {
     // Astro frontmatter must be the first non-whitespace line.
-    const front = /^(?:\uFEFF)?[ \t]*---[ \t]*(?:\r?\n)/.exec(original);
+    const front = /^(?:﻿)?[ \t]*---[ \t]*(?:\r?\n)/.exec(original);
     if (front) {
       const endRe = /^[ \t]*---[ \t]*(?:\r?\n|$)/gm;
       endRe.lastIndex = front[0].length;
       const end = endRe.exec(original);
-      if (end) parts.push({ start: front[0].length, end: end.index, lang: 'ts' });
+      if (end) {
+        parts.push({ start: front[0].length, end: end.index, lang: 'ts' });
+        pos = end.index + end[0].length;
+      }
     }
   }
-  let pos = 0;
   while (pos < original.length) {
     const open = original.indexOf('<', pos);
     if (open < 0) break;
@@ -51,39 +57,36 @@ export function extractEmbeddedSections(filename: string, original: string): Arr
     const closing = close.exec(original);
     if (!closing) break;
     pos = closing.index + closing[0].length;
-    const langMatch = /(?:^|\s)lang\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
-    const lang = (langMatch?.[1] ?? langMatch?.[2] ?? langMatch?.[3] ?? 'js').toLowerCase();
-    const typeMatch = /(?:^|\s)type\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
-    const mime = (typeMatch?.[1] ?? typeMatch?.[2] ?? typeMatch?.[3] ?? '').toLowerCase();
+    const lang = attribute(attrs, 'lang') ?? 'js';
+    const mime = attribute(attrs, 'type') ?? '';
     const hasSrc = /(?:^|\s)src\s*(?:=|\s|$)/i.test(attrs);
     if (hasSrc || !['js', 'jsx', 'ts', 'tsx', 'javascript', 'typescript'].includes(lang) || (mime && !/^(?:module|(?:text|application)\/(?:javascript|typescript))$/.test(mime))) continue;
     parts.push({ start: tagEnd + 1, end: closing.index, lang });
   }
-  return parts.sort((a, b) => a.start - b.start).filter((p, i, xs) => i === 0 || p.start >= xs[i - 1].end);
+  return parts;
+}
+
+function attribute(attrs: string, name: string): string | undefined {
+  const match = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(attrs);
+  return (match?.[1] ?? match?.[2] ?? match?.[3])?.toLowerCase();
 }
 
 /** Produce the same virtual text for the SDK-free mapper process and the rule runner. */
 export function buildEmbeddedVirtual(filename: string, original: string, encoding: PositionEncoding = 'utf-16'): MapperOutput {
   const sections = extractEmbeddedSections(filename, original);
-  const chunks = [];
-  const mappings = [];
+  const offsets = indexText(original, encoding);
+  const chunks: string[] = [];
+  const mappings: Mapping[] = [];
   let virtualJsPos = 0;
-  function encodedPos(s: string, index: number): number {
-    return encoding === 'utf-8' ? Buffer.byteLength(s.slice(0, index), 'utf8') : index;
-  }
-  function encodedLength(s: string): number { return encoding === 'utf-8' ? Buffer.byteLength(s, 'utf8') : s.length; }
   for (const { start, end } of sections) {
     if (chunks.length) {
       chunks.push('\n;\n');
-      virtualJsPos += 3;
+      virtualJsPos += 3; // ASCII: same length in either encoding
     }
-    const text = original.slice(start, end);
-    chunks.push(text);
-    mappings.push([
-      virtualJsPos, encodedLength(text), encodedPos(original, start),
-      encodedPos(original, end) - encodedPos(original, start), 0,
-    ]);
-    virtualJsPos += encodedLength(text);
+    const length = offsets.toEncoded(end) - offsets.toEncoded(start);
+    chunks.push(original.slice(start, end));
+    mappings.push([virtualJsPos, length, offsets.toEncoded(start), length, 0]);
+    virtualJsPos += length;
   }
   const isJsx = sections.some((p) => p.lang.includes('x'));
   return { text: chunks.join(''), extension: isJsx ? '.tsx' : '.ts', mappings };

@@ -1,6 +1,6 @@
+import type { Severity } from './rules.js';
+
 export type PositionEncoding = 'utf-16' | 'utf-8';
-export type RuleName = 'no-debugger' | 'no-console' | 'eqeqeq' | 'no-var' | 'no-eval' | 'no-explicit-any';
-export type Severity = 'off' | 'warn' | 'error';
 
 export interface MapperDefinition {
   package: string;
@@ -11,9 +11,11 @@ export interface MapperDefinition {
 export interface ProjectConfig {
   filename: string;
   root: string;
-  raw: Record<string, any>;
   compilerOptions: Record<string, unknown>;
-  contentMappers: MapperDefinition[];
+  /** Lintable files selected by the tsconfig's files/include/exclude, including mapped extensions. */
+  fileNames: string[];
+  /** The content mappers registered for each declared extension; more than one is a conflict. */
+  mappers: Map<string, MapperDefinition[]>;
 }
 
 export interface MapperDiagnostic {
@@ -23,10 +25,13 @@ export interface MapperDiagnostic {
   messageText: string;
 }
 
+/** `[virtualStart, virtualLength, originalStart, originalLength, kind, features?]` */
+export type Mapping = [number, number, number, number, number, ...unknown[]];
+
 export interface MapperOutput {
   text: string;
   extension: string;
-  mappings?: number[][];
+  mappings: Mapping[];
   diagnostics?: MapperDiagnostic[];
   supplemental?: MapperOutput[];
 }
