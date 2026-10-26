@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEmbeddedVirtual, extractEmbeddedSections } from '../packages/embedded-mapper/embedded.js';
-import { indexText, mappingForSpan as mapSpans } from '../src/spans.js';
+import { createSpanMapper, indexText } from '../src/spans.js';
 import type { MapperOutput, PositionEncoding } from '../src/types.js';
 
 function mappingForSpan(output: MapperOutput, original: string, encoding: PositionEncoding, start: number, end: number) {
-  return mapSpans(output.mappings, indexText(output.text, encoding), indexText(original, encoding), start, end);
+  return createSpanMapper(output.mappings, indexText(output.text, encoding), indexText(original, encoding)).map(start, end);
 }
 
 test('Vue scripts and HTML comments map to original locations', () => {
@@ -81,4 +81,19 @@ test('UTF-8 offset index matches byte counts and rejects split characters', () =
   assert.deepEqual([0, 1, 5, 7, 10, 11].map(index.fromEncoded), [0, 1, 3, 4, 5, 6]);
   assert.deepEqual([2, 4, 6, 12, -1].map(index.fromEncoded), [-1, -1, -1, -1, -1]);
   assert.deepEqual(index.lineColumn(text.length), { line: 1, column: 7 });
+});
+
+test('span mapper prefers the latest-starting covering mapping and finds the nearest preceding source', () => {
+  const original = 'abcdefghij';
+  const virtual = 'ABCDE;xyz';
+  const spans = createSpanMapper([[6, 3, 7, 3, 0], [0, 5, 0, 5, 0], [1, 2, 4, 2, 0]], indexText(virtual, 'utf-16'),
+    indexText(original, 'utf-16'));
+  assert.deepEqual(spans.map(1, 3), { start: 4, end: 6 });
+  assert.deepEqual(spans.map(0, 2), { start: 0, end: 2 });
+  assert.deepEqual(spans.map(7, 9), { start: 8, end: 10 });
+  assert.equal(spans.map(4, 7), null);
+  assert.deepEqual(spans.nearestBefore(5), { start: 5, end: 5 });
+  assert.deepEqual(spans.nearestBefore(7), { start: 8, end: 8 });
+  assert.equal(createSpanMapper([[2, 1, 0, 1, 0]], indexText(virtual, 'utf-16'), indexText(original, 'utf-16'))
+    .nearestBefore(1), null);
 });

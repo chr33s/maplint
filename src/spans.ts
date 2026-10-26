@@ -72,28 +72,59 @@ export function decodeSpan(text: TextIndex, start: number, end: number): SourceS
   return span.start >= 0 && span.start <= span.end ? span : null;
 }
 
-/** Map a virtual-text span to the original file, or null when no mapping covers it safely. */
-export function mappingForSpan(
-  mappings: Mapping[],
-  virtual: TextIndex,
-  original: TextIndex,
-  start: number,
-  end: number,
-): SourceSpan | null {
-  const spanStart = virtual.toEncoded(start);
-  const spanEnd = virtual.toEncoded(end);
-  for (const [vStart, vLength, oStart, oLength, kind] of mappings) {
-    if (spanStart < vStart || spanEnd > vStart + vLength) continue;
-    if (kind === 0 && vLength === oLength) { // 1:1 verbatim mapping
-      return decodeSpan(original, oStart + spanStart - vStart, oStart + spanEnd - vStart);
-    }
-    // Atoms/aliases have no meaningful partial positions. Map only whole atoms.
-    if ((kind === 1 || kind === 2) && spanStart === vStart && spanEnd === vStart + vLength) {
-      return decodeSpan(original, oStart, oStart + oLength);
-    }
-  }
-  // Synthetic text has no original location: never invent a diagnostic span.
-  return null;
+export interface SpanMapper {
+  /** The original span of virtual `[start, end)`, or null when no mapping covers it safely. */
+  map(start: number, end: number): SourceSpan | null;
+  /** An empty original span at the mapped text nearest before virtual `index`; null if no mapped text precedes it. */
+  nearestBefore(index: number): SourceSpan | null;
+}
+
+/**
+ * Map spans of one virtual text back to the original file. Mappings are sorted once so each lookup is a binary
+ * search; where mappings overlap, the latest-starting one that covers a span wins.
+ */
+export function createSpanMapper(mappings: Mapping[], virtual: TextIndex, original: TextIndex): SpanMapper {
+  const sorted = [...mappings].sort((a, b) => a[0] - b[0]);
+  const starts = sorted.map(([vStart]) => vStart);
+  // reach[i] is the furthest virtual end among sorted[0..i]: a backwards walk stops once nothing earlier can cover.
+  const reach: number[] = [];
+  for (const [i, [vStart, vLength]] of sorted.entries()) reach.push(Math.max(reach[i - 1] ?? 0, vStart + vLength));
+  // Index of the last mapping starting at or before `offset`, or -1.
+  const lastStartingAt = (offset: number) => sorted.length && starts[0] <= offset ? lastAtOrBelow(starts, offset) : -1;
+  return {
+    map(start, end) {
+      const spanStart = virtual.toEncoded(start);
+      const spanEnd = virtual.toEncoded(end);
+      for (let i = lastStartingAt(spanStart); i >= 0 && reach[i] >= spanEnd; i--) {
+        const [vStart, vLength, oStart, oLength, kind] = sorted[i];
+        if (spanEnd > vStart + vLength) continue;
+        if (kind === 0 && vLength === oLength) { // 1:1 verbatim mapping
+          return decodeSpan(original, oStart + spanStart - vStart, oStart + spanEnd - vStart);
+        }
+        // Atoms/aliases have no meaningful partial positions. Map only whole atoms.
+        if ((kind === 1 || kind === 2) && spanStart === vStart && spanEnd === vStart + vLength) {
+          return decodeSpan(original, oStart, oStart + oLength);
+        }
+      }
+      // Synthetic text has no original location: never invent a diagnostic span.
+      return null;
+    },
+    nearestBefore(index) {
+      const offset = virtual.toEncoded(index);
+      // The mapping whose text reaches closest to `offset`: it covers `offset`, or ends nearest before it.
+      let nearest: Mapping | undefined;
+      let reached = -1;
+      for (let i = lastStartingAt(offset); i >= 0 && Math.min(reach[i], offset) > reached; i--) {
+        const end = Math.min(sorted[i][0] + sorted[i][1], offset);
+        if (end > reached) [nearest, reached] = [sorted[i], end];
+      }
+      if (!nearest) return null;
+      const [vStart, vLength, oStart, oLength, kind] = nearest;
+      const at = kind === 0 && vLength === oLength ? oStart + Math.min(offset - vStart, vLength)
+        : offset >= vStart + vLength ? oStart + oLength : oStart;
+      return decodeSpan(original, at, at);
+    },
+  };
 }
 
 /** Virtual output for a plain JS/TS file: the file itself, mapped 1:1. */

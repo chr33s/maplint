@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from '../src/cli.js';
 import { lintProject, runNativeCompiler } from '../src/engine.js';
-import { mapperFor, readProject } from '../src/project.js';
+import { collectFiles, mapperFor, readProject, resolveMapperPackage } from '../src/project.js';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const project = path.join(root, 'examples/demo/tsconfig.json');
@@ -200,5 +200,69 @@ new JsonRpcPeer(process.stdin, process.stdout, { handlers: {
     assert.deepEqual(result.diagnostics.map(d => `${d.rule}:${d.message}`).sort(), [
       'mapper/m:kept', 'no-console:Unexpected console access', 'no-debugger:Unexpected debugger statement',
       'no-explicit-any:Avoid explicit any type']);
+  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test('contentMappers follow extends like TypeScript 7; config errors fail the run', () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'maplint-extends-'));
+  try {
+    writeFiles(scratch, {
+      'cfg/a.json': JSON.stringify({ contentMappers: [{ package: 'a', extensions: ['.Vue'] }] }),
+      'cfg/b.json': JSON.stringify({ extends: './a.json' }),
+      'cfg/c.json': JSON.stringify({ contentMappers: [{ package: 'c', extensions: ['.svelte'] }] }),
+      'inherit.json': JSON.stringify({ extends: './cfg/b.json', include: ['src'] }),
+      'later.json': JSON.stringify({ extends: ['./cfg/b.json', './cfg/c.json'] }),
+      'cleared.json': JSON.stringify({ extends: './cfg/a.json', contentMappers: null }),
+      'missing.json': JSON.stringify({ extends: './cfg/missing.json' }),
+      'ts7.json': JSON.stringify({ compilerOptions: { someTs7Option: true }, include: ['src'] }),
+      'src/App.Vue': '<script>debugger;</script>',
+    });
+    const inherit = readProject(path.join(scratch, 'inherit.json'));
+    assert.equal(mapperFor(inherit, 'x.vue')?.package, 'a');
+    assert.deepEqual(collectFiles(inherit, []).map(f => path.basename(f)), ['App.Vue']);
+    const later = readProject(path.join(scratch, 'later.json'));
+    assert.equal(mapperFor(later, 'x.svelte')?.package, 'c');
+    assert.equal(mapperFor(later, 'x.vue'), undefined);
+    assert.equal(readProject(path.join(scratch, 'cleared.json')).mappers.size, 0);
+    assert.throws(() => readProject(path.join(scratch, 'missing.json')), /missing\.json/);
+    assert.doesNotThrow(() => readProject(path.join(scratch, 'ts7.json')));
+  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test('mapper manifest compilerOptions must be option names', () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'maplint-manifest-'));
+  try {
+    writeFiles(scratch, { 'node_modules/m/package.json': JSON.stringify({ name: 'm',
+      typescript: { contentMapper: { exec: ['node', 'server.js'], compilerOptions: 'strict' } } }) });
+    assert.throws(() => resolveMapperPackage('m', scratch), /invalid typescript\.contentMapper\.compilerOptions/);
+  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test('a failed transform is reported for its file and the rest of the project is still linted', async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'maplint-transform-'));
+  try {
+    writeFiles(scratch, {
+      'node_modules/m/package.json': JSON.stringify({ name: 'm', type: 'module',
+        typescript: { contentMapper: { exec: ['node', 'server.js'] } } }),
+      'node_modules/m/server.js': `
+import { JsonRpcPeer } from ${JSON.stringify(rpcUrl)};
+new JsonRpcPeer(process.stdin, process.stdout, { handlers: {
+  initialize() { return {positionEncoding:'utf-16',diagnosticSource:'m'}; },
+  openProject() { return {}; },
+  transform({content}) {
+    if (content === 'reject') throw new Error('cannot map');
+    if (content === 'crash') process.exit(3);
+    return {text: content, extension: '.ts', mappings: [[0, content.length, 0, content.length, 0]]};
+  },
+  closeProject() { return null; },
+}});
+`,
+      'src/a.cmp': 'reject', 'src/b.cmp': 'crash', 'src/c.cmp': 'debugger;',
+      'tsconfig.json': JSON.stringify({ include: ['src'], contentMappers: [{ package: 'm', extensions: ['.cmp'] }] }),
+    });
+    const result = await lintProject({ project: path.join(scratch, 'tsconfig.json'), inputs: [], allowExternal: true });
+    assert.deepEqual(result.diagnostics.map(d => `${path.basename(d.file)} ${d.rule}`),
+      ['a.cmp mapper/m', 'b.cmp mapper/m', 'c.cmp no-debugger']);
+    assert.match(result.diagnostics[0].message, /Transform failed: .*cannot map/);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 });

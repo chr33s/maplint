@@ -38,7 +38,7 @@ Date: 2026-10-25 · Scope: transition the working MVP into a credible Oxlint com
 1. Add framework AST/templating-specific plugins rather than relying on the demo script extractor.
 2. Implement source-safe `--fix` by rejecting edits that overlap synthesized or non-bijective mappings.
 3. Replace simplistic suppression comments with full block/line directive semantics, including mapper-provided diagnostic directives.
-4. Support TypeScript project's `extends` custom mapper merging, project references, config diagnostics, watched files and dynamic mapper identities.
+4. Support project references, watched files and dynamic mapper identities (`extends` inheritance of `contentMappers` and config diagnostics are done).
 5. Enforce tighter process permissions (timeouts, environment allowlist, optional isolated execution) and improve crash recovery.
 
 **Gate:** golden rule/fix compatibility tests on real-world framework projects and fuzz testing of mappings.

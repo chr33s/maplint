@@ -3,12 +3,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { collectFiles, findUp, loadRuleConfig, mapperFor, readProject } from './project.js';
 import { MapperProcess } from './mapper-host.js';
-import { lintVirtual } from './linter.js';
+import { lintFile } from './linter.js';
 import { normalizeRules } from './rules.js';
 import { decodeSpan, identityOutput, indexText, type TextIndex } from './spans.js';
 import type { Diagnostic, MapperDefinition, MapperOutput, ProjectConfig } from './types.js';
-
-const LINTABLE_VIRTUAL = /\.[cm]?[jt]sx?$/;
 
 export interface LintResult {
   files: number;
@@ -43,19 +41,28 @@ export async function lintProject(options: { project: string; allowExternal: boo
           session = await new MapperProcess(mapper, project).start();
           sessions.set(mapper, session);
         }
-        output = await session.transform(file, original);
+        try {
+          output = await session.transform(file, original);
+        } catch (error) {
+          // A failed transform is an error in that file; the rest of the project is still linted. A mapper that
+          // exited is restarted for the next file.
+          if (session.closed) {
+            sessions.delete(mapper);
+            await session.stop();
+          }
+          diagnostics.push({ file, line: 1, column: 1, start: 0, end: 0, severity: 'error',
+            rule: `mapper/${session.sourceName}`,
+            message: `Transform failed: ${error instanceof Error ? error.message : String(error)}` });
+          continue;
+        }
         source = indexText(original, session.positionEncoding);
         diagnostics.push(...mapperDiagnostics(file, source, output, session.sourceName));
       } else {
         output = identityOutput(original, path.extname(file).toLowerCase());
         source = indexText(original, 'utf-16');
       }
-      for (const [index, virtualFile] of [output, ...output.supplemental ?? []].entries()) {
-        if (!LINTABLE_VIRTUAL.test(virtualFile.extension)) continue; // e.g. JSON is not lintable JS/TS.
-        diagnostics.push(...lintVirtual({ originalFile: file, original: source,
-          virtual: `${file}.virtual${index}${virtualFile.extension}`,
-          output: virtualFile, rules }));
-      }
+      diagnostics.push(...lintFile({ originalFile: file, original: source,
+        outputs: [output, ...output.supplemental ?? []], rules }));
     }
   } finally {
     await Promise.all([...sessions.values()].map(s => s.stop()));

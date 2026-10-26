@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { JsonRpcPeer } from './jsonrpc.js';
-import { resolveMapperPackage } from './project.js';
+import { BASE_EXTENSIONS, resolveMapperPackage } from './project.js';
 import type { Mapping, MapperDefinition, MapperDiagnostic, MapperOutput, PositionEncoding, ProjectConfig } from './types.js';
 
-const VIRTUAL_EXTENSION = /^\.(?:[cm]?[jt]sx?|json)$/;
+const CANONICAL_EXTENSIONS = [...BASE_EXTENSIONS, '.json'];
 
 let nextHandle = 1;
 export class MapperProcess {
@@ -72,6 +72,11 @@ export class MapperProcess {
     }
   }
 
+  /** Whether the mapper process has gone away; further requests fail. */
+  get closed(): boolean {
+    return this.peer.closed;
+  }
+
   async transform(fileName: string, content: string): Promise<MapperOutput> {
     const result = await this.peer.request('transform', { fileName, content, projectHandle: this.handle });
     return validateOutput(result, this.definition.package);
@@ -91,7 +96,7 @@ export class MapperProcess {
 function validateOutput(value: any, source: string, supplemental = false): MapperOutput {
   // Supplemental outputs (e.g. `.d.ts` declarations) may use any extension; only JS/TS ones are linted.
   if (!value || typeof value.text !== 'string' ||
-      !(supplemental ? typeof value.extension === 'string' : VIRTUAL_EXTENSION.test(value.extension))) {
+      !(supplemental ? typeof value.extension === 'string' : CANONICAL_EXTENSIONS.includes(value.extension))) {
     throw new Error(`${source} returned invalid virtual text/extension`);
   }
   for (const key of ['mappings', 'diagnostics', 'supplemental']) {

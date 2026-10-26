@@ -14,7 +14,9 @@ export interface ProjectConfig {
   compilerOptions: Record<string, unknown>;
   /** Lintable files selected by the tsconfig's files/include/exclude, including mapped extensions. */
   fileNames: string[];
-  /** The content mappers registered for each declared extension; more than one is a conflict. */
+  /** Every lintable file extension: JS/TS and mapped ones, lowercase and as declared. */
+  extensions: string[];
+  /** The content mappers registered for each lowercase extension; more than one is a conflict. */
   mappers: Map<string, MapperDefinition[]>;
 }
 

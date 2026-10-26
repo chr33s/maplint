@@ -2,6 +2,7 @@
 import type { Readable, Writable } from 'node:stream';
 
 const MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
+const MAX_HEADER_BYTES = 8192;
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -19,7 +20,11 @@ export class JsonRpcPeer {
   private readonly output: Writable;
   private readonly handlers: NonNullable<JsonRpcOptions['handlers']>;
   private readonly timeoutMs: number;
-  private buffer: Buffer;
+  /** An incomplete header. */
+  private header: Buffer;
+  /** Chunks of the current body, once its header is read; joined only when complete. */
+  private body: Buffer[];
+  private bodyBytes: number;
   private contentLength: number | null;
   private nextId: number;
   private readonly pending: Map<number, PendingRequest>;
@@ -30,7 +35,9 @@ export class JsonRpcPeer {
     this.output = output;
     this.handlers = options.handlers ?? {};
     this.timeoutMs = options.timeoutMs ?? 15_000;
-    this.buffer = Buffer.alloc(0);
+    this.header = Buffer.alloc(0);
+    this.body = [];
+    this.bodyBytes = 0;
     this.contentLength = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -75,39 +82,45 @@ export class JsonRpcPeer {
   }
 
   #onData(chunk: Buffer | string) {
-    if (this.closed) return;
-    this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
-    // Bound untrusted data, including never-terminated headers.
-    if (this.buffer.length > MAX_MESSAGE_BYTES) {
-      this.close(new Error('Content mapper response exceeds 32 MiB'));
-      return;
-    }
-    while (true) {
+    let data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    // Bytes are copied only to complete a header or a body, so a large message costs linear time. Both are bounded:
+    // untrusted data, including never-terminated headers, cannot grow without limit.
+    while (!this.closed) {
       if (this.contentLength === null) {
-        const headerEnd = this.buffer.indexOf('\r\n\r\n');
+        const pending = this.header.length ? Buffer.concat([this.header, data]) : data;
+        const headerEnd = pending.indexOf('\r\n\r\n');
         if (headerEnd < 0) {
-          if (this.buffer.length > 8192) this.close(new Error('Content mapper header too long'));
+          if (pending.length > MAX_HEADER_BYTES) this.close(new Error('Content mapper header too long'));
+          this.header = pending;
           return;
         }
-        const header = this.buffer.subarray(0, headerEnd).toString('ascii');
+        const header = pending.subarray(0, headerEnd).toString('ascii');
         const match = header.match(/(?:^|\r\n)Content-Length:\s*(\d+)\s*(?:\r\n|$)/i);
         if (!match || Number(match[1]) > MAX_MESSAGE_BYTES) {
           this.close(new Error('Invalid content-mapper Content-Length header'));
           return;
         }
         this.contentLength = Number(match[1]);
-        this.buffer = this.buffer.subarray(headerEnd + 4);
+        this.header = Buffer.alloc(0);
+        data = pending.subarray(headerEnd + 4);
       }
-      if (this.buffer.length < this.contentLength) return;
-      const body = this.buffer.subarray(0, this.contentLength);
-      this.buffer = this.buffer.subarray(this.contentLength);
+      const needed = this.contentLength - this.bodyBytes;
+      if (data.length < needed) {
+        this.body.push(data);
+        this.bodyBytes += data.length;
+        return;
+      }
+      this.body.push(data.subarray(0, needed));
+      const body = Buffer.concat(this.body, this.contentLength);
+      data = data.subarray(needed);
+      this.body = [];
+      this.bodyBytes = 0;
       this.contentLength = null;
       try {
         const message = JSON.parse(body.toString('utf8'));
         void this.#dispatch(message);
       } catch (error) {
         this.close(new Error(`Invalid JSON-RPC response: ${error instanceof Error ? error.message : String(error)}`));
-        return;
       }
     }
   }

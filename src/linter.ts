@@ -1,77 +1,73 @@
 import type * as TS from '@typescript/typescript6';
 import { legacyTS } from './ts6.js';
+import { BASE_EXTENSIONS } from './project.js';
 import { normalizeRules, RULES, type Rule, type RuleConfig, type RuleName, type Severity } from './rules.js';
-import { indexText, mappingForSpan, type TextIndex } from './spans.js';
+import { createSpanMapper, indexText, type TextIndex } from './spans.js';
 import type { Diagnostic, MapperOutput, SourceSpan } from './types.js';
 
 const RULE_ENTRIES = Object.entries(RULES) as Array<[RuleName, Rule]>;
 const DIRECTIVE = /^\/\/\s*maplint-disable-(next-line|line)\b\s*(.*)/;
 
-interface Finding extends SourceSpan {
-  rule: RuleName | 'syntax';
-  message: string;
-}
-
-export function lintVirtual({
+/** Lint every JS/TS virtual output of one original file; suppression directives in any output apply to all. */
+export function lintFile({
   originalFile,
   original,
-  virtual,
-  output,
+  outputs,
   rules = normalizeRules(),
 }: {
   originalFile: string;
   /** The original file's text, indexed in the mapper's position encoding. */
   original: TextIndex;
-  /** Virtual file name; its extension selects the script kind. */
-  virtual: string;
-  output: MapperOutput;
+  /** The canonical output first, then supplemental outputs. Non-JS/TS outputs (e.g. JSON) are skipped. */
+  outputs: MapperOutput[];
   rules?: RuleConfig;
 }): Diagnostic[] {
   const ts = legacyTS();
-  const sf = ts.createSourceFile(virtual, output.text, ts.ScriptTarget.Latest, true);
-  const findings: Finding[] = [];
-
-  // parseDiagnostics is internal API, but avoids building a Program just to report syntax errors.
-  for (const d of (sf as TS.SourceFile & { parseDiagnostics?: TS.Diagnostic[] }).parseDiagnostics ?? []) {
-    const start = d.start ?? 0;
-    findings.push({ rule: 'syntax', message: ts.flattenDiagnosticMessageText(d.messageText, '\n'),
-      start, end: start + (d.length ?? 0) });
-  }
-  const context = { ts, sf };
-  function walk(node: TS.Node): void {
-    for (const [rule, { message, check }] of RULE_ENTRIES) {
-      const span = check(node, context);
-      if (span) findings.push({ rule, message, ...span });
-    }
-    ts.forEachChild(node, walk);
-  }
-  walk(sf);
-
-  const virtualText = indexText(output.text, original.encoding);
-  const mapSpan = (start: number, end: number) => mappingForSpan(output.mappings, virtualText, original, start, end);
+  const severities: Record<RuleName | 'syntax', Severity> = { ...rules, syntax: 'error' };
+  const findings: Diagnostic[] = [];
   const suppressions: Array<{ line: number; rules: string[] }> = [];
-  for (const comment of lineComments(ts, sf)) {
-    const match = DIRECTIVE.exec(sf.text.slice(comment.start, comment.end));
-    if (!match) continue;
-    const mapped = mapSpan(comment.start, comment.end);
-    if (!mapped) continue;
-    const { line } = original.lineColumn(mapped.start);
-    suppressions.push({ line: match[1] === 'line' ? line : line + 1, rules: match[2].split(/[\s,]+/).filter(Boolean) });
-  }
+  for (const [index, output] of outputs.entries()) {
+    // Declarations such as `.d.ts` are JS/TS too.
+    if (!BASE_EXTENSIONS.some(extension => output.extension.toLowerCase().endsWith(extension))) continue;
+    // The virtual file name's extension selects the script kind.
+    const sf = ts.createSourceFile(`${originalFile}.virtual${index}${output.extension}`, output.text,
+      ts.ScriptTarget.Latest, true);
+    const spans = createSpanMapper(output.mappings, indexText(output.text, original.encoding), original);
+    const report = (rule: RuleName | 'syntax', message: string, mapped: SourceSpan | null) => {
+      const severity = severities[rule];
+      if (severity === 'off' || !mapped) return;
+      findings.push({ file: originalFile, ...original.lineColumn(mapped.start), ...mapped, severity, rule, message });
+    };
 
-  const severities: Record<Finding['rule'], Severity> = { ...rules, syntax: 'error' };
-  const diagnostics: Diagnostic[] = [];
-  for (const { rule, message, start, end } of findings) {
-    const severity = severities[rule];
-    if (severity === 'off') continue;
-    const mapped = mapSpan(start, end);
-    if (!mapped) continue;
-    const { line, column } = original.lineColumn(mapped.start);
-    // Syntax errors cannot be suppressed.
-    if (rule !== 'syntax' && suppressions.some(s => s.line === line && (!s.rules.length || s.rules.includes(rule)))) continue;
-    diagnostics.push({ file: originalFile, line, column, ...mapped, severity, rule, message });
+    // parseDiagnostics is internal API, but avoids building a Program just to report syntax errors.
+    for (const d of (sf as TS.SourceFile & { parseDiagnostics?: TS.Diagnostic[] }).parseDiagnostics ?? []) {
+      const start = d.start ?? 0;
+      // An error on synthetic text (such as a separator after an unclosed script) is usually caused by the user
+      // code before it, so it is reported there.
+      report('syntax', ts.flattenDiagnosticMessageText(d.messageText, '\n'),
+        spans.map(start, start + (d.length ?? 0)) ?? spans.nearestBefore(start));
+    }
+    const context = { ts, sf };
+    const walk = (node: TS.Node): void => {
+      for (const [rule, { message, check }] of RULE_ENTRIES) {
+        const span = check(node, context);
+        if (span) report(rule, message, spans.map(span.start, span.end));
+      }
+      ts.forEachChild(node, walk);
+    };
+    walk(sf);
+
+    for (const comment of lineComments(ts, sf)) {
+      const match = DIRECTIVE.exec(sf.text.slice(comment.start, comment.end));
+      const mapped = match && spans.map(comment.start, comment.end);
+      if (!mapped) continue;
+      const { line } = original.lineColumn(mapped.start);
+      suppressions.push({ line: match[1] === 'line' ? line : line + 1, rules: match[2].split(/[\s,]+/).filter(Boolean) });
+    }
   }
-  return diagnostics;
+  // Syntax errors cannot be suppressed.
+  return findings.filter(({ rule, line }) => rule === 'syntax' ||
+    !suppressions.some(s => s.line === line && (!s.rules.length || s.rules.includes(rule))));
 }
 
 /**

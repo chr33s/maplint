@@ -7,42 +7,81 @@ import type { MapperDefinition, ProjectConfig } from './types.js';
 export const BASE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
 const IGNORED_DIR_GLOBS = ['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.svelte-kit', '.astro']
   .map(name => `**/${name}/**`);
+// TypeScript 6 does not know every TypeScript 7 compiler option or value; the native compiler validates those.
+// "No inputs were found" is expected because readProject withholds wildcard matches from TypeScript.
+const IGNORED_CONFIG_ERRORS = new Set([5023, 5025, 6046, 18003]);
 
 export function readProject(configPath: string): ProjectConfig {
   const filename = path.resolve(configPath);
+  const root = path.dirname(filename);
   const ts = legacyTS();
   const read = ts.readConfigFile(filename, ts.sys.readFile);
   if (read.error) throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
-  // Legacy TS6 does not know TS7's contentMappers key but retains it in raw config.
-  const contentMappers: unknown = read.config.contentMappers ?? [];
+  const host: TS.ParseConfigHost = {
+    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
+    fileExists: ts.sys.fileExists,
+    readFile: ts.sys.readFile,
+    readDirectory: () => [],
+  };
+  const extendedConfigs = new Map<string, TS.ExtendedConfigCacheEntry>();
+  const contentMappers = resolveContentMappers(ts, host, filename, extendedConfigs);
   if (!Array.isArray(contentMappers)) throw new Error('tsconfig contentMappers must be an array');
   const mappers = new Map<string, MapperDefinition[]>();
   for (const mapper of contentMappers) {
     if (!mapper || typeof mapper.package !== 'string' || !Array.isArray(mapper.extensions) ||
         !mapper.extensions.every((e: unknown) => typeof e === 'string' && e.startsWith('.')))
       throw new Error('Invalid content mapper declaration in tsconfig.json');
-    for (const extension of new Set<string>(mapper.extensions)) {
+    // File extensions are matched case-insensitively.
+    for (const extension of new Set<string>(mapper.extensions.map((e: string) => e.toLowerCase()))) {
       mappers.set(extension, [...mappers.get(extension) ?? [], mapper]);
     }
   }
   // TypeScript resolves files/include/exclude (and extends) and hands the wildcard specs to readDirectory. Maplint
   // matches them itself: TypeScript would keep only program files, dropping JavaScript without allowJs and files
-  // that share a name with a higher-priority extension.
-  const lintable = [...BASE_EXTENSIONS, ...mappers.keys()];
+  // that share a name with a higher-priority extension. Declared spellings are kept because matching is case-sensitive.
+  const extensions = [...new Set([...BASE_EXTENSIONS, ...mappers.keys(),
+    ...contentMappers.flatMap(mapper => mapper.extensions)])];
   let matched: string[] = [];
-  const host: TS.ParseConfigHost = {
-    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
-    fileExists: ts.sys.fileExists,
-    readFile: ts.sys.readFile,
-    readDirectory(root, _extensions, excludes, includes, depth) {
-      matched = ts.sys.readDirectory(root, lintable, [...excludes ?? [], ...IGNORED_DIR_GLOBS], includes, depth);
-      return [];
-    },
-  };
+  const matchingHost: TS.ParseConfigHost = { ...host, readDirectory(directory, _extensions, excludes, includes, depth) {
+    matched = ts.sys.readDirectory(directory, extensions, [...excludes ?? [], ...IGNORED_DIR_GLOBS], includes, depth);
+    return [];
+  } };
   // With wildcard matches withheld, TypeScript's file list holds only the literal `files` entries.
-  const parsed = ts.parseJsonConfigFileContent(read.config, host, path.dirname(filename), undefined, filename);
-  return { filename, root: path.dirname(filename), compilerOptions: parsed.options,
-    fileNames: [...parsed.fileNames, ...matched], mappers };
+  const parsed = ts.parseJsonConfigFileContent(read.config, matchingHost, root, undefined, filename, undefined,
+    undefined, extendedConfigs);
+  const errors = parsed.errors.filter(d => !IGNORED_CONFIG_ERRORS.has(d.code))
+    .map(d => `${d.file ? `${d.file.fileName}: ` : ''}${ts.flattenDiagnosticMessageText(d.messageText, '\n')}`);
+  if (errors.length) throw new Error(errors.join('\n'));
+  return { filename, root, compilerOptions: parsed.options, fileNames: [...parsed.fileNames, ...matched], extensions,
+    mappers };
+}
+
+/**
+ * The contentMappers in effect for `filename`, following `extends` as TypeScript 7 does: a config's own value wins
+ * (`null` clears inherited mappers), otherwise the last base that has one.
+ */
+function resolveContentMappers(ts: typeof TS, host: TS.ParseConfigHost, filename: string,
+  extendedConfigs: Map<string, TS.ExtendedConfigCacheEntry>): unknown {
+  // Parsing a stub that extends the project config caches every config in the extends chain, with its raw JSON
+  // (where TypeScript 6 keeps the contentMappers key it does not know) and resolved extends paths. Errors are
+  // reported by the full parse.
+  ts.parseJsonConfigFileContent({ extends: filename }, host, path.dirname(filename), undefined, undefined, undefined,
+    undefined, extendedConfigs);
+  const key = (file: string) => (host.useCaseSensitiveFileNames ? file : file.toLowerCase()).replaceAll('\\', '/');
+  const configs = new Map([...extendedConfigs.values()].map(entry =>
+    [key(entry.extendedResult.fileName), entry.extendedConfig]));
+  const visit = (file: string): unknown => {
+    const config = configs.get(key(file));
+    if (!config) return undefined;
+    if (config.raw.contentMappers !== undefined) return config.raw.contentMappers;
+    const bases = [config.extendedConfigPath ?? []].flat();
+    for (let i = bases.length - 1; i >= 0; i--) {
+      const inherited = visit(bases[i]);
+      if (inherited !== undefined) return inherited;
+    }
+    return undefined;
+  };
+  return visit(filename) ?? [];
 }
 
 /** The content mapper for `file`'s extension. Conflicting registrations are an error only for files that use them. */
@@ -64,14 +103,13 @@ export function loadRuleConfig(root: string): Record<string, unknown> {
 
 /** Lintable files: the tsconfig's file list, or the given paths when there are any. */
 export function collectFiles(project: ProjectConfig, inputs: string[]): string[] {
-  const extensions = [...BASE_EXTENSIONS, ...project.mappers.keys()];
-  const supported = (file: string) => extensions.includes(path.extname(file).toLowerCase());
+  const supported = (file: string) => project.extensions.includes(path.extname(file).toLowerCase());
   const candidates = !inputs.length ? project.fileNames : inputs.flatMap(input => {
     const absolute = path.resolve(input);
     const stat = fs.statSync(absolute, { throwIfNoEntry: false });
     if (!stat) throw new Error(`Input path does not exist: ${input}`);
     if (stat.isDirectory()) {
-      return legacyTS().sys.readDirectory(absolute, extensions, IGNORED_DIR_GLOBS, ['**/*']);
+      return legacyTS().sys.readDirectory(absolute, project.extensions, IGNORED_DIR_GLOBS, ['**/*']);
     }
     if (!supported(absolute)) throw new Error(`No parser or content mapper configured for ${input}`);
     return [absolute];
@@ -110,5 +148,9 @@ export function resolveMapperPackage(packageName: string, projectRoot: string): 
   if (!def || !Array.isArray(def.exec) || !def.exec.length || !def.exec.every((a: unknown) => typeof a === 'string')) {
     throw new Error(`${packageName} has no valid typescript.contentMapper.exec`);
   }
-  return { directory: path.dirname(manifest), exec: def.exec, compilerOptions: def.compilerOptions ?? [] };
+  const compilerOptions = def.compilerOptions ?? [];
+  if (!Array.isArray(compilerOptions) || !compilerOptions.every((o: unknown) => typeof o === 'string')) {
+    throw new Error(`${packageName} has invalid typescript.contentMapper.compilerOptions (expected option names)`);
+  }
+  return { directory: path.dirname(manifest), exec: def.exec, compilerOptions };
 }

@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { lintVirtual } from '../src/linter.js';
+import { lintFile } from '../src/linter.js';
 import { normalizeRules } from '../src/rules.js';
 import { identityOutput, indexText } from '../src/spans.js';
+import type { MapperOutput } from '../src/types.js';
 import { buildEmbeddedVirtual } from '../packages/embedded-mapper/embedded.js';
 
 function lint(text: string, file = '/x/src.ts', rules = normalizeRules()) {
   const output = file.endsWith('.vue') ? buildEmbeddedVirtual(file, text) : identityOutput(text, path.extname(file));
-  return lintVirtual({ originalFile: file, original: indexText(text, 'utf-16'), virtual: file + output.extension,
-    output, rules });
+  return lintFile({ originalFile: file, original: indexText(text, 'utf-16'), outputs: [output], rules });
 }
 
 test('six rules are AST-based and have distinct correct spans', () => {
@@ -87,4 +87,22 @@ test('directive-like template text does not suppress diagnostics', () => {
 
 test('no-var ignores using declarations', () => {
   assert.deepEqual(lint('using a = f();\nawait using b = g();\nvar c = 1;').map(d => `${d.rule}@${d.line}`), ['no-var@3']);
+});
+
+test('syntax errors on synthetic text are reported at the preceding source', () => {
+  const text = '<script>const x = (</script>\n<script>let y = 1</script>';
+  const found = lint(text, '/x/App.vue').filter(d => d.rule === 'syntax');
+  assert.ok(found.length > 0);
+  assert.equal(found[0].start, text.indexOf('</script>'));
+  assert.equal(found[0].end, found[0].start);
+});
+
+test('suppression directives apply to findings in every output of a file', () => {
+  const text = '// maplint-disable-next-line no-explicit-any\nlet x: any;';
+  const stripped = 'let x: any;';
+  const at = text.indexOf(stripped);
+  const supplemental: MapperOutput = { text: stripped, extension: '.ts',
+    mappings: [[0, stripped.length, at, stripped.length, 0]] };
+  assert.deepEqual(lintFile({ originalFile: '/x/a.ts', original: indexText(text, 'utf-16'),
+    outputs: [identityOutput(text, '.ts'), supplemental] }), []);
 });

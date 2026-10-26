@@ -45,7 +45,7 @@ Native TypeScript 7.1 and Maplint launch compliant content mappers independently
 | `src/jsonrpc.ts` | Request/response communication with mapper executable | JSON-RPC 2.0 + `Content-Length` framing |
 | `src/spans.ts` | Per-text offset and line index, virtual → original span mapping | Precomputed tables, binary search |
 | `src/rules.ts` | Rule registry: names, default severities, messages, detection | TypeScript 6 AST type guards |
-| `src/linter.ts` | Parse virtual text, run rules, apply suppressions, map findings | TypeScript 6 compatibility AST |
+| `src/linter.ts` | Parse each virtual output of a file, run rules, map findings, apply suppressions from all outputs | TypeScript 6 compatibility AST |
 | `src/ts6.ts` | Typed lazy loader for the TypeScript 6 API | `createRequire` |
 | `packages/embedded-mapper/embedded.ts` | Demonstration embedded-language source transform | Extract script blocks and Astro frontmatter |
 | `packages/embedded-mapper/server.ts` | Register executable mapper with TypeScript 7.1 | JSON-RPC protocol implementation |
@@ -60,7 +60,7 @@ The TypeScript sources and tests compile with strict checking into ESM `.js` fil
 4. Send `initialize` offering `utf-16` and `utf-8`. Respect mapper-chosen encoding.
 5. Send `openProject` with absolute config path, opaque handle, mapper options, and declared compiler options.
 6. For every associated file, send `transform { fileName, content, projectHandle }`; consume `{text,extension,mappings,diagnostics?,supplemental?}`, validated once at the process boundary.
-7. Lint canonical output and JS/TS supplemental outputs (including declarations); collapse duplicate diagnostics.
+7. Lint canonical output and JS/TS supplemental outputs (including declarations) together, so a suppression directive in one output applies to the same original line in all; collapse duplicate diagnostics. A failed transform becomes an error diagnostic for that file.
 8. Send `closeProject`; terminate the process and close the JSON-RPC connection even if linting failed.
 
 ### Span-map interpretation
