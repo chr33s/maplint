@@ -1,0 +1,29 @@
+{
+  "name": "maplint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental mapper-agnostic JS/TS linter using TypeScript 7.1 content mappers",
+  "bin": {
+    "maplint": "./dist/bin/maplint.js"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@typescript/typescript6": "^6.0.2",
+    "typescript": "7.1.0-beta"
+  },
+  "scripts": {
+    "build": "node ./node_modules/typescript/bin/tsc --project tsconfig.json",
+    "lint": "npm run build && node ./dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external examples/demo/src --json",
+    "typecheck": "npm run build && node ./dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external --typecheck examples/demo/src",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "rules": {
+    "no-debugger": "error",
+    "no-console": "warn",
+    "eqeqeq": "warn",
+    "no-var": "warn",
+    "no-eval": "error",
+    "no-explicit-any": "warn"
+  }
+}

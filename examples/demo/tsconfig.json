@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "strict": false,
+    "target": "es2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "allowJs": true,
+    "skipLibCheck": true
+  },
+  "contentMappers": [
+    {
+      "package": "@maplint/embedded-mapper",
+      "extensions": [
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".html"
+      ]
+    }
+  ],
+  "files": [
+    "src/main.ts",
+    "src/App.vue",
+    "src/Other.svelte",
+    "src/Example.astro"
+  ]
+}

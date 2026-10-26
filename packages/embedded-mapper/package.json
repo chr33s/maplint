@@ -1,0 +1,17 @@
+{
+  "name": "@maplint/embedded-mapper",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Demo TypeScript 7.1 content mapper for embedded script regions",
+  "typescript": {
+    "contentMapper": {
+      "exec": [
+        "node",
+        "../../dist/packages/embedded-mapper/server.js"
+      ],
+      "compilerOptions": [],
+      "dynamicConfig": false
+    }
+  }
+}
