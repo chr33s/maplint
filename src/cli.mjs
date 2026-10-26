@@ -67,11 +67,14 @@ export async function lintProject(options) {
         output = await session.transform(file, original);
         encoding = session.positionEncoding;
         for (const d of output.diagnostics ?? []) {
-          if (!Number.isSafeInteger(d.start) || !Number.isSafeInteger(d.length)) continue;
+          if (!Number.isSafeInteger(d.start) || !Number.isSafeInteger(d.length) || d.length < 0) continue;
+          const endOffset = d.start + d.length;
+          if (!Number.isSafeInteger(endOffset)) continue;
           const start = encoding === 'utf-8' ? utf8ToIndex(original, d.start) : d.start;
-          if (start < 0 || start > original.length) continue;
+          const end = encoding === 'utf-8' ? utf8ToIndex(original, endOffset) : endOffset;
+          if (start < 0 || end < start || end > original.length) continue;
           const lc = lineCol(original, start);
-          diagnostics.push({ file, line: lc.line, column: lc.column, start, end: start,
+          diagnostics.push({ file, line: lc.line, column: lc.column, start, end,
             rule: `mapper/${session.sourceName}/${d.code}`, severity: 'error', message: d.messageText });
         }
         // Supplemental source files are a TypeScript concept. MVP lints canonical output only.
@@ -119,7 +122,7 @@ export async function runNativeCompiler(projectFile) {
   let dir = cwd;
   let command = null;
   while (true) {
-    const candidate = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+    const candidate = path.join(dir, 'node_modules', 'typescript', 'bin', 'tsc');
     if (fs.existsSync(candidate)) { command = candidate; break; }
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -128,7 +131,7 @@ export async function runNativeCompiler(projectFile) {
   if (!command) throw new Error('TypeScript 7.1 local tsc is missing. Install dependencies first: npm install');
   return new Promise((resolve, reject) => {
     const args = ['--project', path.resolve(projectFile), '--noEmit', '--pretty', 'false', '--runExternalCode'];
-    const proc = spawn(command, args, { cwd, shell: process.platform === 'win32', windowsHide: true });
+    const proc = spawn(process.execPath, [command, ...args], { cwd, windowsHide: true });
     let output = '';
     let error = '';
     const limit = 8 * 1024 * 1024;

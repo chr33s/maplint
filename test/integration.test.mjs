@@ -36,12 +36,11 @@ test('CLI returns JSON and non-zero exit code on errors', () => {
 test('native TypeScript invocation passes --runExternalCode and reports compiler exit status', async () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'maplint-tsc-'));
   try {
-    const bin = path.join(scratch, 'node_modules/.bin');
+    const bin = path.join(scratch, 'node_modules/typescript/bin');
     fs.mkdirSync(bin, { recursive: true });
-    const script = path.join(bin, process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
-    fs.writeFileSync(script, '#!/bin/sh\necho "$@"\nexit 1\n', { mode: 0o755 });
+    const script = path.join(bin, 'tsc');
+    fs.writeFileSync(script, 'console.log(process.argv.slice(2).join(" ")); process.exit(1);\n');
     fs.writeFileSync(path.join(scratch, 'tsconfig.json'), '{}');
-    if (process.platform === 'win32') return;
     const out = await runNativeCompiler(path.join(scratch, 'tsconfig.json'));
     assert.equal(out.code, 1);
     assert.match(out.output, /--runExternalCode/);
@@ -70,7 +69,9 @@ new JsonRpcPeer(process.stdin, process.stdout, { handlers: {
   transform({content}) {
     const start = content.indexOf(':') + 2;
     const text = content.slice(start);
-    return {text, extension:'.ts', mappings:[[0,Buffer.byteLength(text),Buffer.byteLength(content.slice(0,start)),Buffer.byteLength(text),0]]};
+    return {text, extension:'.ts',
+      diagnostics:[{start:0,length:Buffer.byteLength('header😊'),code:'fixture',messageText:'fixture diagnostic'}],
+      mappings:[[0,Buffer.byteLength(text),Buffer.byteLength(content.slice(0,start)),Buffer.byteLength(text),0]]};
   },
   closeProject() { return null; },
 }});
@@ -81,8 +82,11 @@ new JsonRpcPeer(process.stdin, process.stdout, { handlers: {
       contentMappers: [{ package: 'third-party-mapper', extensions: ['.cmp'] }] }));
     const result = await lintProject({ project: config, inputs: [], allowExternal: true });
     assert.equal(result.files, 1);
-    assert.equal(result.diagnostics.length, 1);
-    assert.equal(result.diagnostics[0].rule, 'no-debugger');
-    assert.equal(result.diagnostics[0].column, 'header😊: '.length + 1);
+    assert.equal(result.diagnostics.length, 2);
+    const mapperDiagnostic = result.diagnostics.find(d => d.rule === 'mapper/third-party/fixture');
+    assert.equal(mapperDiagnostic.start, 0);
+    assert.equal(mapperDiagnostic.end, 'header😊'.length);
+    const lintDiagnostic = result.diagnostics.find(d => d.rule === 'no-debugger');
+    assert.equal(lintDiagnostic.column, 'header😊: '.length + 1);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 });
