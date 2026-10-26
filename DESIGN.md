@@ -38,13 +38,15 @@ Native TypeScript 7.1 and Maplint launch compliant content mappers independently
 
 | Module | Role | Implementation |
 | --- | --- | --- |
-| `src/config.mjs` | Read `tsconfig`, rule config and source list, locate mapper manifest | TypeScript 6 config parser; npm `node_modules` ancestor resolution |
-| `src/mapper-host.mjs` | Spawn external mapper process and maintain `projectHandle` | `child_process.spawn`, one process per mapper entry |
-| `src/jsonrpc.mjs` | Request/response communication with mapper executable | JSON-RPC 2.0 + `Content-Length` framing |
-| `src/linter.mjs` | Syntactic lint rules | TypeScript 6 compatibility AST, tree visitor |
-| `src/cli.mjs` | Orchestrate lint run, CLI, diagnostics, native `tsc` | Node.js |
-| `src/embedded.mjs` | Demonstration embedded-language source transform | Extract script blocks and Astro frontmatter |
-| `packages/embedded-mapper/server.mjs` | Register executable mapper with TypeScript 7.1 | JSON-RPC protocol implementation |
+| `src/config.ts` | Read `tsconfig`, rule config and source list, locate mapper manifest | TypeScript 6 config parser; npm `node_modules` ancestor resolution |
+| `src/mapper-host.ts` | Spawn external mapper process and maintain `projectHandle` | `child_process.spawn`, one process per mapper entry |
+| `src/jsonrpc.ts` | Request/response communication with mapper executable | JSON-RPC 2.0 + `Content-Length` framing |
+| `src/linter.ts` | Syntactic lint rules | TypeScript 6 compatibility AST, tree visitor |
+| `src/cli.ts` | Orchestrate lint run, CLI, diagnostics, native `tsc` | Node.js |
+| `src/embedded.ts` | Demonstration embedded-language source transform | Extract script blocks and Astro frontmatter |
+| `packages/embedded-mapper/server.ts` | Register executable mapper with TypeScript 7.1 | JSON-RPC protocol implementation |
+
+The TypeScript sources and tests compile with strict checking into ESM `.js` files in `dist/`. The root package's `"type": "module"` marks these emitted `.js` files as ESM; `.mjs` source extensions are therefore unnecessary.
 
 ### TypeScript content mapper lifecycle
 
@@ -100,11 +102,11 @@ These are minimal syntactic rules, **not fully ESLint/Oxlint-equivalent**: e.g. 
 
 ## Test evidence and acceptance criteria
 
-Locally validated 2026-10-25: **16 unit/integration tests pass** using Node 22 and a TypeScript 5.8-compatible legacy AST substitution. Tests cover a third-party mapper and UTF-8, original Vue and Astro source spans, controls and suppressed synthetic spans, CLI exit codes, errors and a mock `tsc` command preserving `--runExternalCode`.
+Locally validated 2026-10-26: **17 unit/integration tests pass** after strict TypeScript compilation using Node 22 and TypeScript 7.1. Tests cover a third-party mapper and UTF-8, original Vue and Astro source spans, controls and suppressed synthetic spans, CLI exit codes, errors and a mock `tsc` command preserving `--runExternalCode`. The compiled CLI and bundled mapper successfully ran against the TypeScript 7.1 beta.
 
-Not validated locally: installing or executing the actual TypeScript 7.1 beta binary against the example, TypeScript 7.1 editor support, framework-specific type soundness, performance relative to Oxlint.
+Not validated locally: TypeScript 7.1 editor support, framework-specific type soundness, performance relative to Oxlint.
 
-Preproduction gate: run `npm install`, `npm test`, and `node bin/maplint.mjs --project examples/demo/tsconfig.json --allow-external --typecheck` using the published TypeScript 7.1 beta, then add golden fixtures for third-party real Vue/Svelte/Astro content mapper implementations.
+Preproduction gate: add golden fixtures for third-party real Vue/Svelte/Astro content mapper implementations and test cross-platform compiler behavior.
 
 ## Boundaries
 

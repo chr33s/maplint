@@ -4,9 +4,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { lintProject, parseArgs, runNativeCompiler } from '../src/cli.mjs';
+import { lintProject, parseArgs, runNativeCompiler } from '../src/cli.js';
 
-const root = path.resolve(import.meta.dirname, '..');
+const root = path.resolve(import.meta.dirname, '../..');
 const project = path.join(root, 'examples/demo/tsconfig.json');
 
 test('cannot execute mappers or TypeScript without opt-in', async () => {
@@ -20,12 +20,12 @@ test('whole demo uses external mapper process and maps original locations', asyn
   assert.equal(result.diagnostics.filter(d => d.severity === 'error').length, 1);
   assert.equal(result.diagnostics.filter(d => d.severity === 'warn').length, 6);
   const vue = result.diagnostics.filter(d => d.file.endsWith('App.vue'));
-  assert.equal(vue.find(d => d.rule === 'no-debugger').line, 6);
-  assert.equal(vue.find(d => d.rule === 'no-explicit-any').line, 3);
+  assert.equal(vue.find(d => d.rule === 'no-debugger')?.line, 6);
+  assert.equal(vue.find(d => d.rule === 'no-explicit-any')?.line, 3);
 });
 
 test('CLI returns JSON and non-zero exit code on errors', () => {
-  const result = spawnSync(process.execPath, [path.join(root, 'bin/maplint.mjs'), '--project', project,
+  const result = spawnSync(process.execPath, [path.join(root, 'dist/bin/maplint.js'), '--project', project,
     '--allow-external', '--json'], { encoding: 'utf8', cwd: root });
   assert.equal(result.status, 1, result.stderr);
   const data = JSON.parse(result.stdout);
@@ -58,10 +58,10 @@ test('third-party mapper with a different extension and UTF-8 positions', async 
     fs.writeFileSync(path.join(mapper, 'package.json'), JSON.stringify({
       name: 'third-party-mapper',
       type: 'module',
-      typescript: { contentMapper: { exec: ['node', 'server.mjs'] } },
+      typescript: { contentMapper: { exec: ['node', 'server.js'] } },
     }));
-    const rpcUrl = new URL('../src/jsonrpc.mjs', import.meta.url).href;
-    fs.writeFileSync(path.join(mapper, 'server.mjs'), `
+    const rpcUrl = new URL('../src/jsonrpc.js', import.meta.url).href;
+    fs.writeFileSync(path.join(mapper, 'server.js'), `
 import { JsonRpcPeer } from ${JSON.stringify(rpcUrl)};
 new JsonRpcPeer(process.stdin, process.stdout, { handlers: {
   initialize() { return {positionEncoding:'utf-8',diagnosticSource:'third-party'}; },
@@ -84,9 +84,11 @@ new JsonRpcPeer(process.stdin, process.stdout, { handlers: {
     assert.equal(result.files, 1);
     assert.equal(result.diagnostics.length, 2);
     const mapperDiagnostic = result.diagnostics.find(d => d.rule === 'mapper/third-party/fixture');
+    assert.ok(mapperDiagnostic);
     assert.equal(mapperDiagnostic.start, 0);
     assert.equal(mapperDiagnostic.end, 'header😊'.length);
     const lintDiagnostic = result.diagnostics.find(d => d.rule === 'no-debugger');
+    assert.ok(lintDiagnostic);
     assert.equal(lintDiagnostic.column, 'header😊: '.length + 1);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 });

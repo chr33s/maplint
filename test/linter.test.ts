@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lintVirtual, normalizeRules } from '../src/linter.mjs';
-import { buildEmbeddedVirtual } from '../src/embedded.mjs';
+import { lintVirtual, normalizeRules } from '../src/linter.js';
+import { buildEmbeddedVirtual } from '../src/embedded.js';
 
-function lint(text, file = '/x/src.ts', rules = normalizeRules()) {
+function lint(text: string, file = '/x/src.ts', rules = normalizeRules()) {
   const embedded = file.endsWith('.vue');
   const output = embedded ? buildEmbeddedVirtual(file, text)
     : { text, extension: '.ts', mappings: [[0, text.length, 0, text.length, 0]] };

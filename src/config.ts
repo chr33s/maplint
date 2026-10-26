@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import type { MapperDefinition, ProjectConfig } from './types.js';
 
 const require = createRequire(import.meta.url);
-let ts;
+let ts: any;
 export function legacyTS() {
   if (!ts) ts = require('@typescript/typescript6');
   return ts;
@@ -12,7 +13,7 @@ export function legacyTS() {
 export const BASE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.svelte-kit', '.astro']);
 
-export function readProject(configPath) {
+export function readProject(configPath: string): ProjectConfig {
   const filename = path.resolve(configPath);
   const compiler = legacyTS();
   const read = compiler.readConfigFile(filename, compiler.sys.readFile);
@@ -20,7 +21,7 @@ export function readProject(configPath) {
   const raw = read.config;
   const parsed = compiler.parseJsonConfigFileContent(raw, compiler.sys, path.dirname(filename), undefined, filename);
   // Legacy TS6 does not know TS7's contentMappers key but retains it in raw config.
-  const contentMappers = raw.contentMappers ?? [];
+  const contentMappers: MapperDefinition[] = raw.contentMappers ?? [];
   if (!Array.isArray(contentMappers)) throw new Error('tsconfig contentMappers must be an array');
   for (const mapper of contentMappers) {
     if (!mapper || typeof mapper.package !== 'string' || !Array.isArray(mapper.extensions) ||
@@ -30,7 +31,7 @@ export function readProject(configPath) {
   return { filename, root: path.dirname(filename), raw, compilerOptions: parsed.options, contentMappers };
 }
 
-export function loadRuleConfig(root) {
+export function loadRuleConfig(root: string): Record<string, any> {
   const p = path.join(root, 'maplint.config.json');
   if (!fs.existsSync(p)) return {};
   const config = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -39,17 +40,17 @@ export function loadRuleConfig(root) {
   return config.rules ?? {};
 }
 
-export function collectFiles(project, inputs) {
-  const supported = [...BASE_EXTENSIONS, ...project.contentMappers.flatMap(m => m.extensions)];
+export function collectFiles(project: ProjectConfig, inputs: string[]): string[] {
+  const supported: string[] = [...BASE_EXTENSIONS, ...project.contentMappers.flatMap(m => m.extensions)];
   const allowedExt = new Set(supported);
-  const files = new Set();
-  function addFile(name) {
+  const files = new Set<string>();
+  function addFile(name: string) {
     const absolute = path.resolve(name);
     if (absolute.endsWith('.d.ts') || absolute.endsWith('.d.mts') || absolute.endsWith('.d.cts')) return;
     if (allowedExt.has(path.extname(absolute).toLowerCase()) && fs.existsSync(absolute) && fs.statSync(absolute).isFile())
       files.add(absolute);
   }
-  function walk(name) {
+  function walk(name: string) {
     const absolute = path.resolve(name);
     if (!fs.existsSync(absolute)) throw new Error(`Input path does not exist: ${name}`);
     const stat = fs.statSync(absolute);
@@ -83,7 +84,12 @@ export function collectFiles(project, inputs) {
 }
 
 /** Package resolver deliberately scopes mapper resolution to node_modules reachable from tsconfig. */
-export function resolveMapperPackage(packageName, projectRoot) {
+export function resolveMapperPackage(packageName: string, projectRoot: string): {
+  directory: string;
+  manifest: Record<string, any>;
+  exec: string[];
+  compilerOptions: string[];
+} {
   if (!/^(?:@[^/]+\/)?[\w.-]+$/.test(packageName)) {
     throw new Error(`Content mapper must be an npm package name: ${packageName}`);
   }
@@ -93,10 +99,12 @@ export function resolveMapperPackage(packageName, projectRoot) {
     if (fs.existsSync(candidate)) {
       const manifest = JSON.parse(fs.readFileSync(candidate, 'utf8'));
       const def = manifest.typescript?.contentMapper;
-      if (!def || !Array.isArray(def.exec) || !def.exec.length || !def.exec.every(a => typeof a === 'string')) {
+      if (!def || !Array.isArray(def.exec) || !def.exec.length ||
+          !def.exec.every((a: unknown) => typeof a === 'string')) {
         throw new Error(`${packageName} has no valid typescript.contentMapper.exec`);
       }
-      return { directory: path.dirname(candidate), manifest, exec: def.exec, compilerOptions: def.compilerOptions ?? [] };
+      return { directory: path.dirname(candidate), manifest, exec: def.exec as string[],
+        compilerOptions: (def.compilerOptions ?? []) as string[] };
     }
     const parent = path.dirname(directory);
     if (parent === directory) break;

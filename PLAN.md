@@ -11,11 +11,13 @@ Date: 2026-10-25 · Scope: transition the working MVP into a credible Oxlint com
 - [x] Include mapper canonical and supplemental virtual source outputs.
 - [x] Add opt-in permission and optional `tsc --runExternalCode` type checking.
 - [x] Add local tests for Unicode, protocol, cross-file virtual source, original-line diagnostics and CLI, including third-party package.
+- [x] Migrate runtime and test sources to strict TypeScript with ESM JavaScript build output.
+- [x] Validate compiled CLI, bundled mapper, and native TypeScript 7.1 typechecking end-to-end.
 
 ## Milestone 1 — validate on TypeScript 7.1 beta (highest priority)
 
 1. Install using Node 22+ and `npm install` with `typescript@7.1.0-beta`.
-2. Run `node bin/maplint.mjs --project examples/demo/tsconfig.json --allow-external --typecheck` and independently `./node_modules/.bin/tsc -p examples/demo/tsconfig.json --runExternalCode`.
+2. Run `npm test` and `node dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external --typecheck`; independently run TypeScript 7.1 with `--runExternalCode`.
 3. Verify TypeScript locates the workspace-linked `@maplint/embedded-mapper` package and honors the TypeScript 7.1 JSON-RPC protocol/position encoding.
 4. Add golden compiler-diagnostic tests for `.vue`, `.svelte`, `.astro`, `.mdx` (via real framework-provided mappers), and UTF-8/UTF-16 discrepancies.
 5. Pin an exact supported TypeScript beta if the interface changes and add CI across supported OSes.

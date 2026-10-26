@@ -1,9 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { BASE_EXTENSIONS, collectFiles, loadRuleConfig, readProject } from './config.mjs';
-import { MapperProcess } from './mapper-host.mjs';
-import { lintVirtual, lineCol, normalizeRules } from './linter.mjs';
+import { BASE_EXTENSIONS, collectFiles, loadRuleConfig, readProject } from './config.js';
+import { MapperProcess } from './mapper-host.js';
+import { lintVirtual, lineCol, normalizeRules } from './linter.js';
+import type { Diagnostic, MapperOutput, PositionEncoding, ProjectConfig } from './types.js';
+
+interface CliOptions {
+  project: string;
+  typecheck: boolean;
+  allowExternal: boolean;
+  json: boolean;
+  inputs: string[];
+  help?: boolean;
+}
+
+interface LintResult {
+  files: number;
+  diagnostics: Diagnostic[];
+  project: ProjectConfig;
+}
 
 const HELP = `maplint (experimental) — TypeScript 7.1 content-mapper-aware linter
 
@@ -20,8 +36,8 @@ Rules: no-debugger, no-console, eqeqeq, no-var, no-eval, no-explicit-any.
 Severities are configured in maplint.config.json beside the tsconfig.json.
 `;
 
-export function parseArgs(argv) {
-  const args = { project: 'tsconfig.json', typecheck: false, allowExternal: false, json: false, inputs: [] };
+export function parseArgs(argv: string[]): CliOptions {
+  const args: CliOptions = { project: 'tsconfig.json', typecheck: false, allowExternal: false, json: false, inputs: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--project' || arg === '-p') {
@@ -40,20 +56,20 @@ export function parseArgs(argv) {
   return args;
 }
 
-export async function lintProject(options) {
+export async function lintProject(options: Pick<CliOptions, 'project' | 'allowExternal' | 'inputs'>): Promise<LintResult> {
   const project = readProject(options.project);
   const files = collectFiles(project, options.inputs ?? []);
   const rules = normalizeRules(loadRuleConfig(project.root));
   const sessions = new Map();
-  const diagnostics = [];
+  const diagnostics: Diagnostic[] = [];
   try {
     for (const file of files) {
       const original = fs.readFileSync(file, 'utf8');
       const ext = path.extname(file).toLowerCase();
       const defs = project.contentMappers.filter(mapper => mapper.extensions.includes(ext));
       if (defs.length > 1) throw new Error(`More than one mapper registered for ${ext} in ${project.filename}`);
-      let output;
-      let encoding = 'utf-16';
+      let output: MapperOutput;
+      let encoding: PositionEncoding = 'utf-16';
       if (defs.length) {
         if (!options.allowExternal) {
           throw new Error(`File ${file} requires mapper ${defs[0].package}. Pass --allow-external to run it.`);
@@ -105,19 +121,19 @@ export async function lintProject(options) {
   return { files: files.length, diagnostics: deduped, project };
 }
 
-function utf8ToIndex(text, byteOffset) {
+function utf8ToIndex(text: string, byteOffset: number): number {
   if (byteOffset < 0) return -1;
   let b = 0;
   for (let i = 0; i < text.length;) {
     if (b === byteOffset) return i;
-    const cp = text.codePointAt(i);
+    const cp = text.codePointAt(i)!;
     b += Buffer.byteLength(String.fromCodePoint(cp));
     i += cp > 65535 ? 2 : 1;
   }
   return b === byteOffset ? text.length : -1;
 }
 
-export async function runNativeCompiler(projectFile) {
+export async function runNativeCompiler(projectFile: string): Promise<{ code: number | null; output: string }> {
   const cwd = path.dirname(path.resolve(projectFile));
   let dir = cwd;
   let command = null;
@@ -142,7 +158,7 @@ export async function runNativeCompiler(projectFile) {
   });
 }
 
-export function formatHuman(result, compiler) {
+export function formatHuman(result: LintResult, compiler: { code: number | null; output: string } | null): string {
   const records = result.diagnostics.map(d =>
     `${path.relative(process.cwd(), d.file) || d.file}:${d.line}:${d.column} ${d.severity} [${d.rule}] ${d.message}`);
   if (compiler?.output?.trim()) records.push(`\nTypeScript 7.1 diagnostics:\n${compiler.output.trim()}`);
@@ -153,7 +169,7 @@ export function formatHuman(result, compiler) {
   return records.join('\n');
 }
 
-export async function main(argv) {
+export async function main(argv: string[]): Promise<number> {
   const opts = parseArgs(argv);
   if (opts.help) { console.log(HELP); return 0; }
   const result = await lintProject(opts);

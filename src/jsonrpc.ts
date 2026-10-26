@@ -1,6 +1,29 @@
 /** JSON-RPC 2.0 over Content-Length framed byte streams (the TypeScript mapper transport). */
+import type { Readable, Writable } from 'node:stream';
+
+interface PendingRequest {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+interface JsonRpcOptions {
+  handlers?: Record<string, (params: any) => unknown | Promise<unknown>>;
+  timeoutMs?: number;
+}
+
 export class JsonRpcPeer {
-  constructor(input, output, options = {}) {
+  private readonly input: Readable;
+  private readonly output: Writable;
+  private readonly handlers: NonNullable<JsonRpcOptions['handlers']>;
+  private readonly timeoutMs: number;
+  private buffer: Buffer;
+  private contentLength: number | null;
+  private nextId: number;
+  private readonly pending: Map<number, PendingRequest>;
+  closed: boolean;
+
+  constructor(input: Readable, output: Writable, options: JsonRpcOptions = {}) {
     this.input = input;
     this.output = output;
     this.handlers = options.handlers ?? {};
@@ -17,14 +40,14 @@ export class JsonRpcPeer {
     output.on('error', (error) => this.close(error));
   }
 
-  send(message) {
+  send(message: Record<string, any>): void {
     if (this.closed) throw new Error('JSON-RPC connection is closed');
     const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', ...message }), 'utf8');
     this.output.write(`Content-Length: ${payload.length}\r\n\r\n`, 'ascii');
     this.output.write(payload);
   }
 
-  request(method, params) {
+  request(method: string, params: unknown): Promise<any> {
     if (this.closed) return Promise.reject(new Error('JSON-RPC connection is closed'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -39,7 +62,7 @@ export class JsonRpcPeer {
     });
   }
 
-  close(reason = new Error('JSON-RPC connection closed')) {
+  close(reason: Error = new Error('JSON-RPC connection closed')): void {
     if (this.closed) return;
     this.closed = true;
     for (const item of this.pending.values()) {
@@ -49,7 +72,7 @@ export class JsonRpcPeer {
     this.pending.clear();
   }
 
-  #onData(chunk) {
+  #onData(chunk: Buffer | string) {
     if (this.closed) return;
     this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
     // Bound untrusted data, including never-terminated headers.
@@ -81,13 +104,13 @@ export class JsonRpcPeer {
         const message = JSON.parse(body.toString('utf8'));
         void this.#dispatch(message);
       } catch (error) {
-        this.close(new Error(`Invalid JSON-RPC response: ${error.message}`));
+        this.close(new Error(`Invalid JSON-RPC response: ${error instanceof Error ? error.message : String(error)}`));
         return;
       }
     }
   }
 
-  async #dispatch(message) {
+  async #dispatch(message: any): Promise<void> {
     if (message && Object.hasOwn(message, 'method')) {
       const { id, method, params } = message;
       const handler = this.handlers[method];
@@ -100,7 +123,7 @@ export class JsonRpcPeer {
         if (id !== undefined) this.send({ id, result: result ?? null });
       } catch (error) {
         if (id !== undefined) {
-          this.send({ id, error: { code: -32603, message: String(error.message ?? error) } });
+          this.send({ id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } });
         }
       }
       return;

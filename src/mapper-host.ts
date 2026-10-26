@@ -1,10 +1,20 @@
-import { spawn } from 'node:child_process';
-import { JsonRpcPeer } from './jsonrpc.mjs';
-import { resolveMapperPackage } from './config.mjs';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable, Writable } from 'node:stream';
+import { JsonRpcPeer } from './jsonrpc.js';
+import { resolveMapperPackage } from './config.js';
+import type { MapperDefinition, MapperOutput, PositionEncoding, ProjectConfig, SourceSpan } from './types.js';
 
 let nextHandle = 1;
 export class MapperProcess {
-  constructor(definition, project) {
+  private readonly definition: MapperDefinition;
+  private readonly project: ProjectConfig;
+  private readonly handle: string;
+  private child: ChildProcessByStdio<Writable, Readable, Readable> | null;
+  private peer: JsonRpcPeer | null;
+  positionEncoding: PositionEncoding;
+  sourceName = '';
+
+  constructor(definition: MapperDefinition, project: ProjectConfig) {
     this.definition = definition;
     this.project = project;
     this.handle = `maplint-${process.pid}-${nextHandle++}`;
@@ -25,30 +35,31 @@ export class MapperProcess {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', c => { stderr = (stderr + c).slice(-4000); });
     this.peer = new JsonRpcPeer(child.stdout, child.stdin, { timeoutMs: 15_000 });
-    child.once('error', e => this.peer.close(new Error(`Mapper ${this.definition.package}: ${e.message}`)));
-    child.once('exit', (code, signal) => this.peer.close(new Error(
+    child.once('error', e => this.peer?.close(new Error(`Mapper ${this.definition.package}: ${e.message}`)));
+    child.once('exit', (code, signal) => this.peer?.close(new Error(
       `Mapper ${this.definition.package} exited (${code ?? signal})${stderr ? ': ' + stderr : ''}`,
     )));
     try {
-      const hello = await this.peer.request('initialize', {
+      const hello = await this.peer!.request('initialize', {
         protocolVersion: 1, locale: 'en', positionEncodings: ['utf-16', 'utf-8'],
       });
       if (!['utf-16', 'utf-8'].includes(hello?.positionEncoding)) throw new Error('Mapper returned invalid position encoding');
       this.positionEncoding = hello.positionEncoding;
       this.sourceName = hello.diagnosticSource || this.definition.package;
-      const compilerOptions = {};
+      const compilerOptions: Record<string, unknown> = {};
       for (const key of info.compilerOptions) {
         if (Object.hasOwn(this.project.compilerOptions, key))
           compilerOptions[key] = this.project.compilerOptions[key];
       }
-      const projectResponse = await this.peer.request('openProject', {
+      const projectResponse: any = await this.peer!.request('openProject', {
         configFileName: this.project.filename,
         projectHandle: this.handle,
         options: this.definition.options ?? {},
         compilerOptions,
       });
       if (projectResponse?.optionDiagnostics?.length) {
-        throw new Error(`Mapper reported configuration errors: ${projectResponse.optionDiagnostics.map(d => d.messageText).join('; ')}`);
+        throw new Error(`Mapper reported configuration errors: ${projectResponse.optionDiagnostics
+          .map((d: { messageText: string }) => d.messageText).join('; ')}`);
       }
       return this;
     } catch (e) {
@@ -57,8 +68,8 @@ export class MapperProcess {
     }
   }
 
-  async transform(fileName, content) {
-    const result = await this.peer.request('transform', { fileName, content, projectHandle: this.handle });
+  async transform(fileName: string, content: string): Promise<MapperOutput> {
+    const result = await this.peer!.request('transform', { fileName, content, projectHandle: this.handle }) as MapperOutput;
     if (!result || typeof result.text !== 'string' || !/^\.(?:[cm]?[jt]sx?|json)$/.test(result.extension)) {
       throw new Error(`${this.definition.package} returned invalid virtual text/extension`);
     }
@@ -68,17 +79,23 @@ export class MapperProcess {
 
   async stop() {
     if (!this.child) return;
-    if (!this.peer.closed) {
+    if (this.peer && !this.peer.closed) {
       try { await this.peer.request('closeProject', { projectHandle: this.handle }); } catch { /* best effort */ }
     }
-    this.peer.close();
+    this.peer?.close();
     this.child.stdin.end();
     this.child.kill();
     this.child = null;
   }
 }
 
-export function mappingForSpan(output, original, encoding, start, end) {
+export function mappingForSpan(
+  output: MapperOutput,
+  original: string,
+  encoding: PositionEncoding,
+  start: number,
+  end: number,
+): SourceSpan | null {
   // All linter offsets are JS string indices. Protocol offsets may be UTF-8 bytes.
   const spanStart = encoding === 'utf-8' ? byteOffset(output.text, start) : start;
   const spanEnd = encoding === 'utf-8' ? byteOffset(output.text, end) : end;
@@ -103,13 +120,13 @@ export function mappingForSpan(output, original, encoding, start, end) {
   return null;
 }
 
-function byteOffset(text, index) { return Buffer.byteLength(text.slice(0, index), 'utf8'); }
-function jsOffset(text, bytes) {
+function byteOffset(text: string, index: number): number { return Buffer.byteLength(text.slice(0, index), 'utf8'); }
+function jsOffset(text: string, bytes: number): number {
   if (bytes === 0) return 0;
   let i = 0;
   let b = 0;
   while (i < text.length && b < bytes) {
-    const codePoint = text.codePointAt(i);
+    const codePoint = text.codePointAt(i)!;
     const char = String.fromCodePoint(codePoint);
     b += Buffer.byteLength(char, 'utf8');
     i += char.length;

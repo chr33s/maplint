@@ -1,6 +1,6 @@
 # Maplint MVP
 
-**Experimental content-mapper-aware lint runner for JavaScript/TypeScript and embedded-language files.**
+**Experimental TypeScript content-mapper-aware lint runner for JavaScript/TypeScript and embedded-language files.**
 
 Maplint is a working proof of concept, not a drop-in Oxlint replacement. It executes TypeScript **7.1 content mapper** packages, lints the **virtual JS/TS** those mappers produce, and maps diagnostics back to the original source. It can optionally invoke TypeScript 7.1's native compiler for project-wide checking using those same mappers.
 
@@ -20,19 +20,20 @@ Requires **Node.js 22+** and access to npm. TypeScript 7.1 is currently a beta.
 
 ```sh
 npm install
+npm run build
 npm test
 
 # Lint the supplied example (intentionally exits 1 due to a debugger statement)
-node bin/maplint.mjs --project examples/demo/tsconfig.json --allow-external
+node dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external
 
 # JSON diagnostics
-node bin/maplint.mjs --project examples/demo/tsconfig.json --allow-external --json
+node dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external --json
 
 # Lint + native TypeScript 7.1 type-check (requires the npm-installed 7.1 tsc)
-node bin/maplint.mjs --project examples/demo/tsconfig.json --allow-external --typecheck
+node dist/bin/maplint.js --project examples/demo/tsconfig.json --allow-external --typecheck
 ```
 
-Or from the repository root, `npx --no-install maplint ...` after `npm install`. `--project` can point to a different project; positional files/directories restrict **lint** selection, but `--typecheck` always checks the full TypeScript project.
+`npm test` also builds before running the compiled tests. From the repository root, `npx --no-install maplint ...` works after `npm run build`. `--project` can point to a different project; positional files/directories restrict **lint** selection, but `--typecheck` always checks the full TypeScript project.
 
 To run TypeScript 7.1 directly against the same content mapper:
 
@@ -96,20 +97,21 @@ Content mappers **transform and map** source. They do not provide the lint rules
 - Content mappers participate in TypeScript's configured-project pipeline, not necessarily programs constructed from `createPrograms` in the new API (see [TypeScript issue #64641](https://github.com/microsoft/TypeScript/issues/64641)). Therefore this MVP invokes native `tsc -p` directly, rather than assuming API-created programs inherit mapper registrations.
 - Like `tsc --runExternalCode`, mappers are **arbitrary external executables**. Only run vetted mappers; Maplint requires an explicit `--allow-external` opt-in.
 
-## Test status (2026-10-25)
+## Test status (2026-10-26)
 
-**16 local tests passed**: protocol round-trip, mapped JS/TS rules, Astro/Vue/Svelte extraction, original-source positions, Unicode UTF-8/UTF-16 maps, JSON CLI output, opt-in enforcement, a third-party mapper fixture, and mocked native-compiler invocation. The environment did **not** permit downloading and executing the published TypeScript 7.1 beta; tests of the rule engine used a locally available TypeScript 5.8 API substitute for the compatible TS6 compiler interface. Therefore the **real TypeScript 7.1 `tsc --runExternalCode` end-to-end run remains to be verified** on a machine after `npm install`.
+**17 tests pass** after strict TypeScript compilation. They cover protocol round-trip, mapped JS/TS rules, Astro/Vue/Svelte extraction, original-source positions, Unicode UTF-8/UTF-16 maps, JSON CLI output, opt-in enforcement, a third-party mapper fixture, suppression comments, and mocked native-compiler invocation. The compiled CLI and bundled mapper were also exercised with the installed TypeScript 7.1 beta; native typechecking exited successfully.
 
 ## Layout
 
 ```text
-bin/maplint.mjs                       command-line entry point
-src/cli.mjs                          project scan, diagnostics, optional native compiler
-src/mapper-host.mjs                  mapper package launch, RPC orchestration, span decoding
-src/jsonrpc.mjs                      minimal framed JSON-RPC transport
-src/linter.mjs                       AST rules, syntax diagnostics, suppression
-src/config.mjs                       config discovery and npm mapper resolution
-src/embedded.mjs                     demonstration framework script extractor and mappings
+bin/maplint.ts                       TypeScript CLI entry point
+src/cli.ts                           project scan, diagnostics, optional native compiler
+src/mapper-host.ts                   mapper package launch, RPC orchestration, span decoding
+src/jsonrpc.ts                       minimal framed JSON-RPC transport
+src/linter.ts                        AST rules, syntax diagnostics, suppression
+src/config.ts                        config discovery and npm mapper resolution
+src/embedded.ts                      demonstration framework script extractor and mappings
+dist/                                 emitted ESM JavaScript
 packages/embedded-mapper/            runnable content mapper process and manifest
 examples/demo/                        Vue / Svelte / Astro example project
 test/                                 integration and unit tests

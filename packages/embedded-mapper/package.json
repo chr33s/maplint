@@ -8,7 +8,7 @@
     "contentMapper": {
       "exec": [
         "node",
-        "server.mjs"
+        "../../dist/packages/embedded-mapper/server.js"
       ],
       "compilerOptions": [],
       "dynamicConfig": false

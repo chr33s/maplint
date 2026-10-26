@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { JsonRpcPeer } from '../src/jsonrpc.mjs';
+import { JsonRpcPeer } from '../src/jsonrpc.js';
 
 test('framed JSON-RPC handles two directions and unicode', async () => {
   const fromA = new PassThrough();

@@ -1,7 +1,12 @@
 import path from 'node:path';
+import type { MapperOutput, PositionEncoding } from './types.js';
 
 /** Small demonstration extractor. Not a conforming Vue/Svelte/Astro parser. */
-export function extractEmbeddedSections(filename, original) {
+export function extractEmbeddedSections(filename: string, original: string): Array<{
+  start: number;
+  end: number;
+  lang: string;
+}> {
   const ext = path.extname(filename).toLowerCase();
   const parts = [];
   if (ext === '.astro') {
@@ -58,15 +63,15 @@ export function extractEmbeddedSections(filename, original) {
 }
 
 /** Produce the same virtual text for the SDK-free mapper process and the rule runner. */
-export function buildEmbeddedVirtual(filename, original, encoding = 'utf-16') {
+export function buildEmbeddedVirtual(filename: string, original: string, encoding: PositionEncoding = 'utf-16'): MapperOutput {
   const sections = extractEmbeddedSections(filename, original);
   const chunks = [];
   const mappings = [];
   let virtualJsPos = 0;
-  function encodedPos(s, index) {
+  function encodedPos(s: string, index: number): number {
     return encoding === 'utf-8' ? Buffer.byteLength(s.slice(0, index), 'utf8') : index;
   }
-  function encodedLength(s) { return encoding === 'utf-8' ? Buffer.byteLength(s, 'utf8') : s.length; }
+  function encodedLength(s: string): number { return encoding === 'utf-8' ? Buffer.byteLength(s, 'utf8') : s.length; }
   for (const { start, end } of sections) {
     if (chunks.length) {
       chunks.push('\n;\n');
